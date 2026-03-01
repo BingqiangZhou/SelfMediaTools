@@ -189,3 +189,43 @@ def concat_mode_video(
     if logger:
         logger.info("%s output generated: %s", mode, output_path)
     return output_path.resolve()
+
+
+def overlay_cover_on_first_frame(
+    *,
+    video_path: Path,
+    cover_path: Path,
+    output_path: Path,
+    fps: int,
+    logger: logging.Logger | None = None,
+) -> Path:
+    if fps <= 0:
+        raise ValueError("fps must be > 0 for first-frame cover overlay")
+
+    frame_window = 1.0 / float(fps)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(video_path),
+        "-i",
+        str(cover_path),
+        "-filter_complex",
+        f"[0:v]setpts=PTS-STARTPTS[v0];[v0][1:v]overlay=0:0:enable='lte(t,{frame_window:.6f})'[vout]",
+        "-map",
+        "[vout]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        str(output_path),
+    ]
+    run_cmd(cmd, logger=logger, check=True)
+    if logger:
+        logger.info("cover overlaid on first frame: %s", output_path)
+    return output_path.resolve()

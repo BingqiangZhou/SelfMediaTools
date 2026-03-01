@@ -32,6 +32,13 @@ class RenderSettings:
 
 
 @dataclass(frozen=True)
+class CoverSettings:
+    prefix_text: str
+    bg_color: str
+    text_color: str
+
+
+@dataclass(frozen=True)
 class AudioItem:
     index: int
     text: str

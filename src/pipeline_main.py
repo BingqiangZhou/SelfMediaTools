@@ -11,11 +11,11 @@ import yaml
 from bgm import mix_bgm
 from ffmpeg_utils import ensure_ffmpeg_tools
 from io_utils import parse_output_modes, parse_size, prepare_output_dirs, read_text_input
-from models import CanvasSize, OutputMode, RenderSettings
-from render_cards import OverlayResolver, render_images_for_mode
+from models import CanvasSize, CoverSettings, OutputMode, RenderSettings
+from render_cards import OverlayResolver, render_cover_image, render_images_for_mode
 from text_split import split_sentences
 from tts import generate_tts
-from video import concat_mode_video, create_clips_for_mode, write_concat_file
+from video import concat_mode_video, create_clips_for_mode, overlay_cover_on_first_frame, write_concat_file
 
 
 DEFAULTS: dict[str, Any] = {
@@ -54,10 +54,17 @@ DEFAULTS: dict[str, Any] = {
     "bgm_fade_in": 1.5,
     "bgm_fade_out": 1.5,
     "bgm_audio_bitrate": "192k",
+    "theme_keyword": None,
+    "cover_enabled": True,
+    "cover_prefix_text": "今日主题",
+    "cover_bg_color": "#000000",
+    "cover_text_color": "#D00000",
 }
+DEFAULT_THEME_KEYWORD = "天命之人"
 
 CLI_KEYS = list(DEFAULTS.keys())
-PATH_KEYS = {"text_file", "font_path", "overlay_image", "overlay_dir", "work_dir", "bgm_file"}
+# Keep input/resource paths relative to config file, but keep work_dir relative to CWD.
+PATH_KEYS = {"text_file", "font_path", "overlay_image", "overlay_dir", "bgm_file"}
 WINDOWS_FONT_CANDIDATES = [
     r"C:\Windows\Fonts\msyh.ttc",
     r"C:\Windows\Fonts\msyhbd.ttc",
@@ -121,6 +128,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bgm-fade-in", type=float, default=None)
     parser.add_argument("--bgm-fade-out", type=float, default=None)
     parser.add_argument("--bgm-audio-bitrate", type=str, default=None)
+
+    parser.add_argument("--theme-keyword", type=str, default=None)
+    parser.add_argument("--cover-enabled", type=_parse_bool, default=None, metavar="true|false")
+    parser.add_argument("--cover-prefix-text", type=str, default=None)
+    parser.add_argument("--cover-bg-color", type=str, default=None)
+    parser.add_argument("--cover-text-color", type=str, default=None)
     return parser
 
 
@@ -272,6 +285,13 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
         resolved["bgm_enabled"] = _parse_bool(str(resolved["bgm_enabled"]))
     else:
         resolved["bgm_enabled"] = bool(resolved.get("bgm_enabled", False))
+    cover_enabled_value = resolved.get("cover_enabled", True)
+    if isinstance(cover_enabled_value, str):
+        resolved["cover_enabled"] = _parse_bool(str(cover_enabled_value))
+    elif cover_enabled_value is None:
+        resolved["cover_enabled"] = True
+    else:
+        resolved["cover_enabled"] = bool(cover_enabled_value)
 
     modes_value = resolved.get("output_modes")
     if isinstance(modes_value, list):
@@ -288,6 +308,21 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
     if not bitrate_value:
         raise ValueError("bgm_audio_bitrate must not be empty")
     resolved["bgm_audio_bitrate"] = bitrate_value
+
+    prefix = str(resolved.get("cover_prefix_text", "") or "").strip()
+    if not prefix:
+        prefix = str(DEFAULTS["cover_prefix_text"])
+    resolved["cover_prefix_text"] = prefix
+
+    cover_bg = str(resolved.get("cover_bg_color", "") or "").strip()
+    if not cover_bg:
+        cover_bg = str(DEFAULTS["cover_bg_color"])
+    resolved["cover_bg_color"] = cover_bg
+
+    cover_text = str(resolved.get("cover_text_color", "") or "").strip()
+    if not cover_text:
+        cover_text = str(DEFAULTS["cover_text_color"])
+    resolved["cover_text_color"] = cover_text
 
 
 def _merge_args(raw_args: argparse.Namespace) -> argparse.Namespace:
@@ -385,6 +420,13 @@ def _mode_dir(base_dir: Path, mode: OutputMode, is_multi_mode: bool) -> Path:
     return base_dir
 
 
+def _resolve_theme_keyword(raw_value: Any) -> str:
+    value = str(raw_value or "").strip()
+    if value:
+        return value
+    return DEFAULT_THEME_KEYWORD
+
+
 def run(args: argparse.Namespace) -> list[Path]:
     _validate_args(args)
     ensure_ffmpeg_tools()
@@ -447,6 +489,14 @@ def run(args: argparse.Namespace) -> list[Path]:
         overlay_top_margin=args.overlay_top_margin,
         overlay_text_gap=args.overlay_text_gap,
     )
+    cover_settings = CoverSettings(
+        prefix_text=args.cover_prefix_text,
+        bg_color=args.cover_bg_color,
+        text_color=args.cover_text_color,
+    )
+    theme_keyword = _resolve_theme_keyword(args.theme_keyword)
+    logger.info("theme_keyword: %s", theme_keyword)
+    logger.info("cover_enabled: %s", args.cover_enabled)
     sizes = _mode_sizes(args)
 
     image_manifest: list[dict[str, Any]] = []
@@ -457,6 +507,25 @@ def run(args: argparse.Namespace) -> list[Path]:
         size = sizes[mode]
         images_dir = _mode_dir(paths["images_dir"], mode, is_multi_mode)
         clips_dir = _mode_dir(paths["segments_dir"], mode, is_multi_mode)
+
+        cover_path = render_cover_image(
+            mode=mode,
+            size=size,
+            settings=cover_settings,
+            theme_keyword=theme_keyword,
+            font_path=settings.font_path,
+            out_dir=images_dir,
+            logger=logger,
+        )
+        image_manifest.append(
+            {
+                "type": "cover",
+                "mode": mode,
+                "index": 0,
+                "keyword": theme_keyword,
+                "image_path": str(cover_path),
+            }
+        )
 
         image_paths = render_images_for_mode(
             sentences=sentences,
@@ -517,11 +586,25 @@ def run(args: argparse.Namespace) -> list[Path]:
             fps=args.fps,
             logger=logger,
         )
+        logger.info("%s raw video generated: %s", mode, merged)
+
+        source_video = merged
+        if args.cover_enabled:
+            cover_name = "final_cover_raw.mp4" if not is_multi_mode else f"final_cover_raw_{mode}.mp4"
+            cover_output = paths["final_dir"] / cover_name
+            source_video = overlay_cover_on_first_frame(
+                video_path=Path(merged),
+                cover_path=cover_path,
+                output_path=cover_output,
+                fps=args.fps,
+                logger=logger,
+            )
+            logger.info("%s cover-first-frame video generated: %s", mode, source_video)
 
         if args.bgm_enabled:
             final_name = "final.mp4" if not is_multi_mode else f"final_{mode}.mp4"
             mixed = mix_bgm(
-                video_path=merged,
+                video_path=source_video,
                 bgm_path=args.bgm_file,
                 out_path=paths["final_dir"] / final_name,
                 volume=args.bgm_volume,
@@ -536,7 +619,7 @@ def run(args: argparse.Namespace) -> list[Path]:
             final_target = paths["final_dir"] / final_name
             if final_target.exists():
                 final_target.unlink()
-            Path(merged).replace(final_target)
+            Path(source_video).replace(final_target)
             outputs.append(final_target)
 
     _write_json(paths["images_dir"] / "image_manifest.json", image_manifest)

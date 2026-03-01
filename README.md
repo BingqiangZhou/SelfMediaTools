@@ -56,11 +56,23 @@ You can override any config key by CLI args. Example:
 uv run python main.py --config configs/config.yaml --bgm-enabled true --bgm-file assets/bgm.MP3 --bgm-volume 0.2
 ```
 
+Cover first-frame example:
+
+```bash
+uv run python main.py --config configs/config.yaml --theme-keyword "天命之人" --cover-enabled true
+```
+
 ## Required Config Keys
 
 - Input: `text` or `text_file` (at least one)
 - Render: `font_path` (required)
 - BGM: `bgm.file` required only when `bgm.enabled=true`
+- Cover keyword: `theme_keyword` is optional; empty value falls back to `天命之人`
+- Cover switch: `cover_enabled=true` overlays generated cover on frame `#0` only
+- Cover style:
+- `cover_prefix_text`: first line text (default `今日主题`)
+- `cover_bg_color`: cover background color
+- `cover_text_color`: cover text color
 - TTS start: `tts_start_offset` controls when the first TTS segment starts (seconds, default `1.0`)
 - Overlay layout tuning:
 - `overlay_height_ratio`: overlay box height ratio of canvas
@@ -93,6 +105,7 @@ output/
     05_final/
       concat_list.txt
       final_raw.mp4
+      final_cover_raw.mp4
       final.mp4
     logs/
       pipeline.log

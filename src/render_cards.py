@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from models import CanvasSize, OutputMode, RenderSettings, numbered_name
+from models import CanvasSize, CoverSettings, OutputMode, RenderSettings, numbered_name
 
 SUPPORTED_OVERLAY_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 
@@ -259,3 +259,99 @@ def render_images_for_mode(
             results[idx] = path
 
     return [results[index] for index in range(1, len(sentences) + 1)]
+
+
+def _truncate_keyword(keyword: str, max_chars: int = 12) -> str:
+    cleaned = (keyword or "").strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return f"{cleaned[:max_chars]}..."
+
+
+def _fit_cover_fonts(
+    draw: ImageDraw.ImageDraw,
+    prefix_text: str,
+    title_text: str,
+    font_path: Path,
+    width: int,
+    height: int,
+    width_limit_ratio: float,
+    height_limit_ratio: float,
+) -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont, int]:
+    # Use conservative size to keep title inside portrait-safe area.
+    base = int(min(width, height) * 0.10)
+    min_size = 22
+    for size in range(base, min_size - 1, -2):
+        unified_size = max(min_size, int(size * 1.25))
+        prefix_font = ImageFont.truetype(str(font_path), size=unified_size)
+        title_font = ImageFont.truetype(str(font_path), size=unified_size)
+        gap = max(10, int(size * 0.32))
+
+        prefix_w, prefix_h = _text_bbox(draw, prefix_text, prefix_font)
+        title_w, title_h = _text_bbox(draw, title_text, title_font)
+        max_w = max(prefix_w, title_w)
+        total_h = prefix_h + gap + title_h
+        if max_w <= int(width * width_limit_ratio) and total_h <= int(height * height_limit_ratio):
+            return prefix_font, title_font, gap
+
+    fallback_size = max(min_size, int(min_size * 1.25))
+    prefix_font = ImageFont.truetype(str(font_path), size=fallback_size)
+    title_font = ImageFont.truetype(str(font_path), size=fallback_size)
+    return prefix_font, title_font, 10
+
+
+def render_cover_image(
+    *,
+    mode: OutputMode,
+    size: CanvasSize,
+    settings: CoverSettings,
+    theme_keyword: str,
+    font_path: Path,
+    out_dir: Path,
+    logger: logging.Logger | None = None,
+) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    keyword = _truncate_keyword(theme_keyword)
+    title_text = f"\u300a{keyword}\u300b"
+    canvas = Image.new("RGB", (size.width, size.height), settings.bg_color)
+    draw = ImageDraw.Draw(canvas)
+    is_portrait = size.height >= size.width
+
+    prefix_font, title_font, gap = _fit_cover_fonts(
+        draw=draw,
+        prefix_text=settings.prefix_text,
+        title_text=title_text,
+        font_path=font_path,
+        width=size.width,
+        height=size.height,
+        width_limit_ratio=0.72 if is_portrait else 0.84,
+        height_limit_ratio=0.56 if is_portrait else 0.62,
+    )
+
+    prefix_w, prefix_h = _text_bbox(draw, settings.prefix_text, prefix_font)
+    title_w, title_h = _text_bbox(draw, title_text, title_font)
+    total_h = prefix_h + gap + title_h
+    y = (size.height - total_h) // 2
+
+    draw.text(
+        ((size.width - prefix_w) // 2, y),
+        settings.prefix_text,
+        font=prefix_font,
+        fill=settings.text_color,
+    )
+    y += prefix_h + gap
+    draw.text(
+        ((size.width - title_w) // 2, y),
+        title_text,
+        font=title_font,
+        fill=settings.text_color,
+    )
+
+    output = (out_dir / "0000_cover.png").resolve()
+    canvas.save(output, format="PNG")
+    if logger:
+        logger.info("%s cover image generated: %s", mode, output)
+    return output

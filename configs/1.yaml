@@ -28,6 +28,13 @@ text_margin_y: 60
 bg_color: "#000000"
 text_color: "#FFFFFF"
 
+# Cover first-frame
+theme_keyword: "即将起飞"
+cover_enabled: true
+cover_prefix_text: "今日主题"
+cover_bg_color: "#000000"
+cover_text_color: "#D00000"
+
 # Overlay
 overlay_image: E:/Projects/Works/SelfMediaTools/assets/image2.jpg
 overlay_dir: null
