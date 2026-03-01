@@ -26,7 +26,6 @@ def _find_font() -> Path:
 def test_render_cover_image_creates_expected_size(tmp_path: Path) -> None:
     font_path = _find_font()
     settings = CoverSettings(
-        prefix_text="今日主题",
         bg_color="#000000",
         text_color="#D00000",
     )
@@ -48,7 +47,6 @@ def test_render_cover_image_creates_expected_size(tmp_path: Path) -> None:
 def test_render_cover_image_handles_long_keyword(tmp_path: Path) -> None:
     font_path = _find_font()
     settings = CoverSettings(
-        prefix_text="今日主题",
         bg_color="#000000",
         text_color="#D00000",
     )

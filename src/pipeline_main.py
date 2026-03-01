@@ -56,7 +56,6 @@ DEFAULTS: dict[str, Any] = {
     "bgm_audio_bitrate": "192k",
     "theme_keyword": None,
     "cover_enabled": True,
-    "cover_prefix_text": "今日主题",
     "cover_bg_color": "#000000",
     "cover_text_color": "#D00000",
 }
@@ -131,7 +130,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--theme-keyword", type=str, default=None)
     parser.add_argument("--cover-enabled", type=_parse_bool, default=None, metavar="true|false")
-    parser.add_argument("--cover-prefix-text", type=str, default=None)
     parser.add_argument("--cover-bg-color", type=str, default=None)
     parser.add_argument("--cover-text-color", type=str, default=None)
     return parser
@@ -309,11 +307,6 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
         raise ValueError("bgm_audio_bitrate must not be empty")
     resolved["bgm_audio_bitrate"] = bitrate_value
 
-    prefix = str(resolved.get("cover_prefix_text", "") or "").strip()
-    if not prefix:
-        prefix = str(DEFAULTS["cover_prefix_text"])
-    resolved["cover_prefix_text"] = prefix
-
     cover_bg = str(resolved.get("cover_bg_color", "") or "").strip()
     if not cover_bg:
         cover_bg = str(DEFAULTS["cover_bg_color"])
@@ -490,7 +483,6 @@ def run(args: argparse.Namespace) -> list[Path]:
         overlay_text_gap=args.overlay_text_gap,
     )
     cover_settings = CoverSettings(
-        prefix_text=args.cover_prefix_text,
         bg_color=args.cover_bg_color,
         text_color=args.cover_text_color,
     )

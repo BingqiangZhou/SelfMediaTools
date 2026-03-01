@@ -23,7 +23,6 @@ def test_cover_config_merge_and_cli_override(tmp_path: Path) -> None:
                 f"text_file: {text_file.name}",
                 f"font_path: {font_file.name}",
                 "cover_enabled: false",
-                "cover_prefix_text: \"测试主题\"",
                 "cover_bg_color: \"#010203\"",
                 "cover_text_color: \"#AA0000\"",
             ]
@@ -45,7 +44,6 @@ def test_cover_config_merge_and_cli_override(tmp_path: Path) -> None:
 
     assert merged.cover_enabled is True
     assert merged.theme_keyword == "新关键词"
-    assert merged.cover_prefix_text == "测试主题"
     assert merged.cover_bg_color == "#010203"
     assert merged.cover_text_color == "#AA0000"
 

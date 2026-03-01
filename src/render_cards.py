@@ -270,36 +270,28 @@ def _truncate_keyword(keyword: str, max_chars: int = 12) -> str:
     return f"{cleaned[:max_chars]}..."
 
 
-def _fit_cover_fonts(
+def _fit_cover_font(
     draw: ImageDraw.ImageDraw,
-    prefix_text: str,
     title_text: str,
     font_path: Path,
     width: int,
     height: int,
     width_limit_ratio: float,
     height_limit_ratio: float,
-) -> tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont, int]:
+) -> ImageFont.FreeTypeFont:
     # Use conservative size to keep title inside portrait-safe area.
     base = int(min(width, height) * 0.10)
     min_size = 22
     for size in range(base, min_size - 1, -2):
         unified_size = max(min_size, int(size * 1.25))
-        prefix_font = ImageFont.truetype(str(font_path), size=unified_size)
         title_font = ImageFont.truetype(str(font_path), size=unified_size)
-        gap = max(10, int(size * 0.32))
 
-        prefix_w, prefix_h = _text_bbox(draw, prefix_text, prefix_font)
         title_w, title_h = _text_bbox(draw, title_text, title_font)
-        max_w = max(prefix_w, title_w)
-        total_h = prefix_h + gap + title_h
-        if max_w <= int(width * width_limit_ratio) and total_h <= int(height * height_limit_ratio):
-            return prefix_font, title_font, gap
+        if title_w <= int(width * width_limit_ratio) and title_h <= int(height * height_limit_ratio):
+            return title_font
 
     fallback_size = max(min_size, int(min_size * 1.25))
-    prefix_font = ImageFont.truetype(str(font_path), size=fallback_size)
-    title_font = ImageFont.truetype(str(font_path), size=fallback_size)
-    return prefix_font, title_font, 10
+    return ImageFont.truetype(str(font_path), size=fallback_size)
 
 
 def render_cover_image(
@@ -320,9 +312,8 @@ def render_cover_image(
     draw = ImageDraw.Draw(canvas)
     is_portrait = size.height >= size.width
 
-    prefix_font, title_font, gap = _fit_cover_fonts(
+    title_font = _fit_cover_font(
         draw=draw,
-        prefix_text=settings.prefix_text,
         title_text=title_text,
         font_path=font_path,
         width=size.width,
@@ -331,18 +322,8 @@ def render_cover_image(
         height_limit_ratio=0.56 if is_portrait else 0.62,
     )
 
-    prefix_w, prefix_h = _text_bbox(draw, settings.prefix_text, prefix_font)
     title_w, title_h = _text_bbox(draw, title_text, title_font)
-    total_h = prefix_h + gap + title_h
-    y = (size.height - total_h) // 2
-
-    draw.text(
-        ((size.width - prefix_w) // 2, y),
-        settings.prefix_text,
-        font=prefix_font,
-        fill=settings.text_color,
-    )
-    y += prefix_h + gap
+    y = (size.height - title_h) // 2
     draw.text(
         ((size.width - title_w) // 2, y),
         title_text,

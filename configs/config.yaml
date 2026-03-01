@@ -1,4 +1,4 @@
-﻿# Input: provide either text or text_file
+# Input: provide either text or text_file
 text: null
 text_file: examples/sample_input.txt
 
@@ -31,7 +31,6 @@ text_color: "#FFFFFF"
 # Cover first-frame
 theme_keyword: null
 cover_enabled: true
-cover_prefix_text: "今日主题"
 cover_bg_color: "#000000"
 cover_text_color: "#D00000"
 
