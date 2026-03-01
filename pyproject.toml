@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "self-media-tools"
+version = "1.0.0"
+description = "Text -> sentence TTS -> sentence cards -> portrait/landscape video pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "edge-tts>=7.0.0",
+  "Pillow>=10.0.0",
+  "PyYAML>=6.0.0",
+]
+
+[project.scripts]
+self-media-tools = "pipeline_main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+  "bgm",
+  "pipeline_main",
+  "ffmpeg_utils",
+  "io_utils",
+  "models",
+  "render_cards",
+  "text_split",
+  "tts",
+  "video",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app_tests"]
+addopts = "-q"
+pythonpath = ["src", "."]
