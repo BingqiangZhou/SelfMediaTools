@@ -29,7 +29,7 @@ bg_color: "#000000"
 text_color: "#FFFFFF"
 
 # Overlay
-overlay_image: ./image2.jpg
+overlay_image: E:/Projects/Works/SelfMediaTools/assets/image2.jpg
 overlay_dir: null
 overlay_height_ratio: 0.35
 overlay_box_width_ratio: 0.68
@@ -40,7 +40,7 @@ overlay_text_gap: 12
 # BGM (optional)
 bgm:
   enabled: true
-  file: ./bgm.mp3
+  file: E:/Projects/Works/SelfMediaTools/assets/bgm.mp3
   volume: 0.18
   fade_in: 1.5
   fade_out: 1.5
