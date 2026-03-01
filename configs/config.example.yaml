@@ -50,3 +50,4 @@ bgm:
   volume: 0.18
   fade_in: 1.5
   fade_out: 1.5
+  audio_bitrate: "192k"
