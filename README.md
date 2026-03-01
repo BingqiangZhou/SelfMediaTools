@@ -70,7 +70,6 @@ uv run python main.py --config configs/config.yaml --theme-keyword "天命之人
 - Cover keyword: `theme_keyword` is optional; empty value falls back to `天命之人`
 - Cover switch: `cover_enabled=true` overlays generated cover on frame `#0` only
 - Cover style:
-- `cover_prefix_text`: first line text (default empty, no prefix line)
 - `cover_bg_color`: cover background color
 - `cover_text_color`: cover text color
 - TTS start: `tts_start_offset` controls when the first TTS segment starts (seconds, default `1.0`)
