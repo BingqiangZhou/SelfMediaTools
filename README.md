@@ -2,6 +2,22 @@
 
 Text -> sentence TTS -> sentence card images (top overlay + bottom text) -> portrait/landscape videos.
 
+## Claude Skill
+
+**video-generator-publisher** v0.0.2 | Updated: 2026-03-02 | Author: Bingqiang Zhou
+
+用于生成自媒体短视频并支持发布到抖音的 Claude Code 技能。
+
+**功能**:
+- 支持竖屏(1080x1920)和横屏(1920x1080)两种输出格式
+- 自动生成"共鸣向上、温暖励志"风格的文案内容
+- 自动发布到抖音创作者平台
+- 支持选择视频首帧作为封面
+- 支持标题和文案内容填写
+- 不允许下载设置
+
+**技能文件**: `.claude/skills/video-generator-publisher/`
+
 ## Requirements
 
 - Python 3.10+
