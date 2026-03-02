@@ -514,6 +514,18 @@ def run(args: argparse.Namespace) -> list[Path]:
                 }
             )
 
+        if args.cover_enabled and segment_paths:
+            first_clip = segment_paths[0]
+            cover_applied_clip = first_clip.with_name(f"cover_{first_clip.name}")
+            overlay_cover_on_first_frame(
+                video_path=first_clip,
+                cover_path=cover_path,
+                output_path=cover_applied_clip,
+                fps=args.fps,
+                logger=logger,
+            )
+            cover_applied_clip.replace(first_clip)
+
         concat_name = "concat_list.txt" if not is_multi_mode else f"concat_{mode}.txt"
         concat_file = write_concat_file(
             mode=mode,
@@ -535,17 +547,6 @@ def run(args: argparse.Namespace) -> list[Path]:
         logger.info("%s raw video generated: %s", mode, merged)
 
         source_video = merged
-        if args.cover_enabled:
-            cover_name = "final_cover_raw.mp4" if not is_multi_mode else f"final_cover_raw_{mode}.mp4"
-            cover_output = paths["final_dir"] / cover_name
-            source_video = overlay_cover_on_first_frame(
-                video_path=Path(merged),
-                cover_path=cover_path,
-                output_path=cover_output,
-                fps=args.fps,
-                logger=logger,
-            )
-            logger.info("%s cover-first-frame video generated: %s", mode, source_video)
 
         if args.bgm_enabled:
             final_name = "final.mp4" if not is_multi_mode else f"final_{mode}.mp4"

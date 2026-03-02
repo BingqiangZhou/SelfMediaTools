@@ -91,7 +91,7 @@ def test_run_cover_overlay_called_for_both_modes(monkeypatch, tmp_path: Path) ->
     outputs = pipeline_main.run(args)
 
     assert len(outputs) == 2
-    assert sorted(cover_calls) == ["final_cover_raw_landscape.mp4", "final_cover_raw_portrait.mp4"]
+    assert sorted(cover_calls) == ["cover_0001.mp4", "cover_0001.mp4"]
 
 
 def test_run_cover_overlay_skipped_when_disabled(monkeypatch, tmp_path: Path) -> None:

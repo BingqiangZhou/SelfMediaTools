@@ -15,6 +15,8 @@ END_PUNCT = {
     "?",
     ".",
     "\u2026",  # …
+    ",",       # comma
+    "\uff0c",  # ，
 }
 TRAILING_QUOTES = {
     '"',
@@ -58,12 +60,10 @@ def _split_line(line: str) -> list[str]:
 
     while i < n:
         ch = line[i]
-        current.append(ch)
 
         if ch in END_PUNCT:
             i += 1
             while i < n and line[i] in END_PUNCT:
-                current.append(line[i])
                 i += 1
             while i < n and line[i] in TRAILING_QUOTES:
                 current.append(line[i])
@@ -74,6 +74,7 @@ def _split_line(line: str) -> list[str]:
             current = []
             continue
 
+        current.append(ch)
         i += 1
 
     tail = _normalize_inline_whitespace("".join(current))
