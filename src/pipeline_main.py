@@ -39,6 +39,9 @@ DEFAULTS: dict[str, Any] = {
     "text_colors": ["#FFFFFF", "#FFD700", "#00BFFF", "#FF6347", "#7CFC00"],
     "text_effects": ["fadein", "slide_left", "slide_right", "slide_top", "slide_bottom"],
     "effect_duration": 0.5,
+    "use_text_effects": False,
+    "random_color": False,
+    "random_effect": False,
     "fps": 30,
     "tts_workers": 4,
     "clip_workers": 2,
@@ -104,6 +107,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text-colors", type=str, default=None, help="Comma-separated hex colors for text cycling")
     parser.add_argument("--text-effects", type=str, default=None, help="Comma-separated effect names for text cycling")
     parser.add_argument("--effect-duration", type=float, default=None)
+    parser.add_argument("--use-text-effects", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Enable text effects (default: false)")
+    parser.add_argument("--random-color", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Use random text colors (default: false)")
+    parser.add_argument("--random-effect", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Use random text effects (default: false)")
 
     parser.add_argument("--fps", type=int, default=None)
     parser.add_argument("--tts-workers", type=int, default=None)
@@ -463,6 +469,9 @@ def run(args: argparse.Namespace) -> list[Path]:
         text_colors=tuple(args.text_colors) if args.text_colors else (),
         text_effects=tuple(args.text_effects) if args.text_effects else (),
         effect_duration=args.effect_duration,
+        use_text_effects=args.use_text_effects,
+        random_color=args.random_color,
+        random_effect=args.random_effect,
     )
     cover_settings = CoverSettings(
         bg_color=args.cover_bg_color,

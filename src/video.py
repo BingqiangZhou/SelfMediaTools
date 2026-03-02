@@ -55,12 +55,17 @@ _previous_color: str | None = None
 def _pick_text_color(index: int, settings: RenderSettings) -> str:
     """Pick text color: first is static text_color, subseq pick random text_colors w/o dupes."""
     global _previous_color
-    
+
+    # If random_color is disabled, always use the primary text_color
+    if not settings.random_color:
+        _previous_color = settings.text_color
+        return settings.text_color
+
     # 1. The first sentence uses the primary config color (typically white)
     if index == 1:
         _previous_color = settings.text_color
         return settings.text_color
-        
+
     # 2. If no available text_colors sequence is set, fallback to the text_color
     if not settings.text_colors:
         _previous_color = settings.text_color
@@ -90,10 +95,23 @@ _previous_effect: str | None = None
 def _pick_effect_name(index: int, settings: RenderSettings) -> str | None:
     """Pick an effect name by randomly choosing from text_effects, avoiding dupes."""
     global _previous_effect
-    
+
+    # If use_text_effects is disabled, always return None (no effect)
+    if not settings.use_text_effects:
+        return None
+
+    # If text_effects is empty, return None
     if not settings.text_effects:
         return None
-        
+
+    # If random_effect is disabled, use the first effect cyclically
+    if not settings.random_effect:
+        effect_index = (index - 1) % len(settings.text_effects)
+        picked = settings.text_effects[effect_index]
+        _previous_effect = picked
+        return picked
+
+    # Random effect mode
     if len(settings.text_effects) == 1:
         return settings.text_effects[0]
 

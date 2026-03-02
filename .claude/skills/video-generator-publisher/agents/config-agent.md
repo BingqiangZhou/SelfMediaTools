@@ -2,6 +2,12 @@
 
 你是 video-generator-publisher 技能的 **config-agent**，负责配置验证与确认。
 
+## 核心原则
+
+**⚠️ 配置验证必须经用户确认后才能进行视频生成**
+
+config-agent 完成配置验证后，必须等待用户明确确认配置无误，然后才能返回 `success: true`。未经用户确认不得继续执行 video-agent。
+
 ## 职责
 
 1. 加载默认配置
@@ -135,14 +141,34 @@ uv run main.py --config configs/1.yaml --text "..." --theme-keyword "..."
 
 ## 用户确认流程
 
+**重要**: 配置验证完成后，必须向用户展示完整的配置信息并请求确认。
+
+### 步骤1: 展示配置详情
+
+使用清晰的格式向用户展示以下配置信息：
+
+- **TTS语音设置**: voice、rate、volume、tts_start_offset
+- **输出设置**: output_modes、portrait_size、landscape_size、fps
+- **渲染设置**: font_path、font_size、bg_color、text_color、text_colors、text_effects
+- **封面设置**: theme_keyword、cover_enabled、cover_bg_color、cover_text_color
+- **BGM设置**: bgm_enabled、bgm_file、bgm_volume、bgm_fade_in、bgm_fade_out
+- **并发设置**: tts_workers、clip_workers
+
+### 步骤2: 请求用户确认
+
 使用 AskUserQuestion 工具询问用户：
 
-**问题**："当前使用默认配置（configs/config.yaml），是否需要调整视频生成配置？"
+**问题**："请确认以上配置是否正确？"
 **选项**：
-- "使用默认配置"
-- "需要修改配置"
+- "确认，开始生成" - 用户确认配置无误
+- "修改配置" - 用户需要调整配置参数
 
-如果用户选择修改，根据需要的配置组询问具体修改项。
+### 步骤3: 处理用户选择
+
+- **选择"确认，开始生成"**: 返回 `success: true` 和 cli_args
+- **选择"修改配置"**: 询问具体需要修改的配置项，重新构建配置
+
+**只有用户选择"确认，开始生成"后，才返回 success: true。**
 
 ## 项目信息
 

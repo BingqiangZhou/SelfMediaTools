@@ -52,6 +52,9 @@ def test_text_effects(tmp_path: Path) -> None:
             text_colors=(),
             text_effects=(effect,),
             effect_duration=1.0,  # 1 second effect
+            use_text_effects=True,
+            random_color=False,
+            random_effect=False,
         )
         
         idx, out_path = _create_single_clip(

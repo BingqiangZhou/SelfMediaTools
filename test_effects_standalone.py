@@ -47,6 +47,9 @@ def main():
             text_colors=(),
             text_effects=(effect,),
             effect_duration=1.0,
+            use_text_effects=True,
+            random_color=False,
+            random_effect=False,
         )
         
         idx, clip_path = _create_single_clip(

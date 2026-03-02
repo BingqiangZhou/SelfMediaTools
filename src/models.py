@@ -27,6 +27,9 @@ class RenderSettings:
     text_colors: tuple[str, ...] = ()
     text_effects: tuple[str, ...] = ()
     effect_duration: float = 0.5
+    use_text_effects: bool = False
+    random_color: bool = False
+    random_effect: bool = False
 
 
 @dataclass(frozen=True)
