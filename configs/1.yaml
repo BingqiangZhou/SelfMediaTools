@@ -1,5 +1,5 @@
 # Input: provide either text or text_file
-text: "别等”状态好了”再开始，状态是做出来的。你能控制的只有今天的时间、注意力和行动：少抱怨一次，多推进一小步；少刷十分钟，多练一遍基本功。目标别写在心里，要写进日程、写进复盘。把欲望收一收，把执行提上来。你不需要被谁点燃，你要学会自己发电。"
+text: "别等状态好了再开始，状态是做出来的。你能控制的只有今天的时间、注意力和行动：少抱怨一次，多推进一小步；少刷十分钟，多练一遍基本功。目标别写在心里，要写进日程、写进复盘。把欲望收一收，把执行提上来。你不需要被谁点燃，你要学会自己发电。"
 text_file: null
 
 # TTS
@@ -14,7 +14,6 @@ portrait_size: 1080x1920
 landscape_size: 1920x1080
 fps: 30
 tts_workers: 4
-image_workers: 4
 clip_workers: 2
 work_dir: output
 
@@ -28,20 +27,21 @@ text_margin_y: 60
 bg_color: "#000000"
 text_color: "#FFFFFF"
 
+# Text effects (cycling per sentence)
+text_effects:
+  - fadein
+  - slide_left
+  - slide_right
+  - slide_top
+  - slide_bottom
+  - rotate
+effect_duration: 0.5
+
 # Cover first-frame
 theme_keyword: "即将起飞"
 cover_enabled: true
 cover_bg_color: "#000000"
 cover_text_color: "#D00000"
-
-# Overlay
-overlay_image: E:/Projects/Works/SelfMediaTools/assets/image2.jpg
-overlay_dir: null
-overlay_height_ratio: 0.35
-overlay_box_width_ratio: 0.68
-overlay_fit: cover
-overlay_top_margin: 48
-overlay_text_gap: 12
 
 # BGM (optional)
 bgm:

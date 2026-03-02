@@ -12,7 +12,7 @@ from bgm import mix_bgm
 from ffmpeg_utils import ensure_ffmpeg_tools
 from io_utils import parse_output_modes, parse_size, prepare_output_dirs, read_text_input
 from models import CanvasSize, CoverSettings, OutputMode, RenderSettings
-from render_cards import OverlayResolver, render_cover_image, render_images_for_mode
+from render_cards import render_cover_image
 from text_split import split_sentences
 from tts import generate_tts
 from video import concat_mode_video, create_clips_for_mode, overlay_cover_on_first_frame, write_concat_file
@@ -36,16 +36,11 @@ DEFAULTS: dict[str, Any] = {
     "text_margin_y": 60,
     "bg_color": "#000000",
     "text_color": "#FFFFFF",
-    "overlay_image": None,
-    "overlay_dir": None,
-    "overlay_height_ratio": 0.35,
-    "overlay_box_width_ratio": 0.68,
-    "overlay_fit": "cover",
-    "overlay_top_margin": 48,
-    "overlay_text_gap": 12,
+    "text_colors": ["#FFFFFF", "#FFD700", "#00BFFF", "#FF6347", "#7CFC00"],
+    "text_effects": ["fadein", "slide_left", "slide_right", "slide_top", "slide_bottom"],
+    "effect_duration": 0.5,
     "fps": 30,
     "tts_workers": 4,
-    "image_workers": 4,
     "clip_workers": 2,
     "work_dir": ".",
     "bgm_enabled": False,
@@ -63,7 +58,7 @@ DEFAULT_THEME_KEYWORD = "天命之人"
 
 CLI_KEYS = list(DEFAULTS.keys())
 # Keep input/resource paths relative to config file, but keep work_dir relative to CWD.
-PATH_KEYS = {"text_file", "font_path", "overlay_image", "overlay_dir", "bgm_file"}
+PATH_KEYS = {"text_file", "font_path", "bgm_file"}
 WINDOWS_FONT_CANDIDATES = [
     r"C:\Windows\Fonts\msyh.ttc",
     r"C:\Windows\Fonts\msyhbd.ttc",
@@ -82,7 +77,7 @@ def _parse_bool(raw: str) -> bool:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Text -> sentence TTS -> sentence cards -> portrait/landscape videos"
+        description="Text -> sentence TTS -> text clips -> portrait/landscape videos"
     )
     parser.add_argument("--config", type=str, default=None, help="YAML config file path")
 
@@ -106,18 +101,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text-margin-y", type=int, default=None)
     parser.add_argument("--bg-color", type=str, default=None)
     parser.add_argument("--text-color", type=str, default=None)
-
-    parser.add_argument("--overlay-image", type=str, default=None)
-    parser.add_argument("--overlay-dir", type=str, default=None)
-    parser.add_argument("--overlay-height-ratio", type=float, default=None)
-    parser.add_argument("--overlay-box-width-ratio", type=float, default=None)
-    parser.add_argument("--overlay-fit", type=str, choices=["cover", "contain"], default=None)
-    parser.add_argument("--overlay-top-margin", type=int, default=None)
-    parser.add_argument("--overlay-text-gap", type=int, default=None)
+    parser.add_argument("--text-colors", type=str, default=None, help="Comma-separated hex colors for text cycling")
+    parser.add_argument("--text-effects", type=str, default=None, help="Comma-separated effect names for text cycling")
+    parser.add_argument("--effect-duration", type=float, default=None)
 
     parser.add_argument("--fps", type=int, default=None)
     parser.add_argument("--tts-workers", type=int, default=None)
-    parser.add_argument("--image-workers", type=int, default=None)
     parser.add_argument("--clip-workers", type=int, default=None)
     parser.add_argument("--work-dir", type=str, default=None)
 
@@ -260,19 +249,15 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
         "min_font_size",
         "text_margin_x",
         "text_margin_y",
-        "overlay_top_margin",
-        "overlay_text_gap",
         "fps",
         "tts_workers",
-        "image_workers",
         "clip_workers",
     ):
         resolved[key] = int(resolved[key])
     for key in (
         "line_spacing",
         "tts_start_offset",
-        "overlay_height_ratio",
-        "overlay_box_width_ratio",
+        "effect_duration",
         "bgm_volume",
         "bgm_fade_in",
         "bgm_fade_out",
@@ -291,16 +276,33 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
     else:
         resolved["cover_enabled"] = bool(cover_enabled_value)
 
+    # Normalize text_colors: accept list or comma-separated string.
+    tc = resolved.get("text_colors")
+    if isinstance(tc, str):
+        resolved["text_colors"] = [c.strip() for c in tc.split(",") if c.strip()]
+    elif isinstance(tc, (list, tuple)):
+        resolved["text_colors"] = [str(c).strip() for c in tc if str(c).strip()]
+    elif tc is None:
+        resolved["text_colors"] = []
+    else:
+        resolved["text_colors"] = []
+
+    # Normalize text_effects: accept list or comma-separated string.
+    te = resolved.get("text_effects")
+    if isinstance(te, str):
+        resolved["text_effects"] = [e.strip() for e in te.split(",") if e.strip()]
+    elif isinstance(te, (list, tuple)):
+        resolved["text_effects"] = [str(e).strip() for e in te if str(e).strip()]
+    elif te is None:
+        resolved["text_effects"] = []
+    else:
+        resolved["text_effects"] = []
+
     modes_value = resolved.get("output_modes")
     if isinstance(modes_value, list):
         resolved["output_modes"] = ",".join(str(item) for item in modes_value)
     elif not isinstance(modes_value, str):
         raise ValueError("output_modes must be a string like 'portrait,landscape' or a list.")
-
-    fit_value = str(resolved.get("overlay_fit", "cover")).lower().strip()
-    if fit_value not in {"cover", "contain"}:
-        raise ValueError("overlay_fit must be 'cover' or 'contain'.")
-    resolved["overlay_fit"] = fit_value
 
     bitrate_value = str(resolved.get("bgm_audio_bitrate", "")).strip()
     if not bitrate_value:
@@ -354,16 +356,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("text_margin_x/text_margin_y must be >= 0")
     if args.fps <= 0:
         raise ValueError("fps must be > 0")
-    if args.tts_workers <= 0 or args.image_workers <= 0 or args.clip_workers <= 0:
-        raise ValueError("tts_workers/image_workers/clip_workers must be > 0")
-    if not (0 <= args.overlay_height_ratio <= 1):
-        raise ValueError("overlay_height_ratio must be between 0 and 1")
-    if not (0 <= args.overlay_box_width_ratio <= 1):
-        raise ValueError("overlay_box_width_ratio must be between 0 and 1")
-    if args.overlay_top_margin < 0:
-        raise ValueError("overlay_top_margin must be >= 0")
-    if args.overlay_text_gap < 0:
-        raise ValueError("overlay_text_gap must be >= 0")
+    if args.tts_workers <= 0 or args.clip_workers <= 0:
+        raise ValueError("tts_workers/clip_workers must be > 0")
+    if args.effect_duration < 0:
+        raise ValueError("effect_duration must be >= 0")
 
     if args.bgm_volume < 0:
         raise ValueError("bgm_volume must be >= 0")
@@ -375,14 +371,6 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise FileNotFoundError(
             f"Font path not found: {font_path}. Please provide a valid Chinese font file."
         )
-    if args.overlay_image:
-        overlay_image = Path(args.overlay_image)
-        if not overlay_image.exists():
-            raise FileNotFoundError(f"overlay_image not found: {overlay_image}")
-    if args.overlay_dir:
-        overlay_dir = Path(args.overlay_dir)
-        if not overlay_dir.exists() or not overlay_dir.is_dir():
-            raise FileNotFoundError(f"overlay_dir not found or not a directory: {overlay_dir}")
 
     if args.bgm_enabled:
         if not args.bgm_file:
@@ -463,10 +451,6 @@ def run(args: argparse.Namespace) -> list[Path]:
     ]
     _write_json(paths["audio_dir"] / "audio_manifest.json", audio_manifest)
 
-    overlay_resolver = OverlayResolver(
-        overlay_dir=Path(args.overlay_dir).resolve() if args.overlay_dir else None,
-        fixed_image=Path(args.overlay_image).resolve() if args.overlay_image else None,
-    )
     settings = RenderSettings(
         font_path=Path(args.font_path).resolve(),
         font_size=args.font_size,
@@ -476,11 +460,9 @@ def run(args: argparse.Namespace) -> list[Path]:
         text_margin_y=args.text_margin_y,
         bg_color=args.bg_color,
         text_color=args.text_color,
-        overlay_height_ratio=args.overlay_height_ratio,
-        overlay_box_width_ratio=args.overlay_box_width_ratio,
-        overlay_fit=args.overlay_fit,
-        overlay_top_margin=args.overlay_top_margin,
-        overlay_text_gap=args.overlay_text_gap,
+        text_colors=tuple(args.text_colors) if args.text_colors else (),
+        text_effects=tuple(args.text_effects) if args.text_effects else (),
+        effect_duration=args.effect_duration,
     )
     cover_settings = CoverSettings(
         bg_color=args.cover_bg_color,
@@ -491,7 +473,6 @@ def run(args: argparse.Namespace) -> list[Path]:
     logger.info("cover_enabled: %s", args.cover_enabled)
     sizes = _mode_sizes(args)
 
-    image_manifest: list[dict[str, Any]] = []
     segment_manifest: list[dict[str, Any]] = []
     outputs: list[Path] = []
 
@@ -509,39 +490,12 @@ def run(args: argparse.Namespace) -> list[Path]:
             out_dir=images_dir,
             logger=logger,
         )
-        image_manifest.append(
-            {
-                "type": "cover",
-                "mode": mode,
-                "index": 0,
-                "keyword": theme_keyword,
-                "image_path": str(cover_path),
-            }
-        )
-
-        image_paths = render_images_for_mode(
-            sentences=sentences,
-            mode=mode,
-            size=size,
-            settings=settings,
-            overlay_resolver=overlay_resolver,
-            out_dir=images_dir,
-            logger=logger,
-            max_workers=args.image_workers,
-        )
-        for idx, image_path in enumerate(image_paths, start=1):
-            image_manifest.append(
-                {
-                    "mode": mode,
-                    "index": idx,
-                    "text": sentences[idx - 1],
-                    "image_path": str(image_path),
-                }
-            )
 
         segment_paths = create_clips_for_mode(
             audio_items=audio_items,
-            images_dir=images_dir,
+            sentences=sentences,
+            size=size,
+            settings=settings,
             clips_dir=clips_dir,
             fps=args.fps,
             tts_start_offset=args.tts_start_offset,
@@ -614,7 +568,6 @@ def run(args: argparse.Namespace) -> list[Path]:
             Path(source_video).replace(final_target)
             outputs.append(final_target)
 
-    _write_json(paths["images_dir"] / "image_manifest.json", image_manifest)
     _write_json(paths["segments_dir"] / "segments_manifest.json", segment_manifest)
 
     return outputs

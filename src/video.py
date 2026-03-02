@@ -3,13 +3,37 @@
 import logging
 import os
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from ffmpeg_utils import run_cmd
-from models import AudioItem, OutputMode, numbered_name
+from moviepy import (
+    AudioFileClip,
+    ColorClip,
+    CompositeAudioClip,
+    CompositeVideoClip,
+    ImageClip,
+    TextClip,
+    VideoFileClip,
+    concatenate_videoclips,
+    vfx,
+)
+from moviepy.audio.AudioClip import AudioClip
+
+from models import AudioItem, CanvasSize, OutputMode, RenderSettings, numbered_name
 
 MAX_CLIP_RETRIES = 3
+
+# Supported text effect names for cycling.
+SUPPORTED_EFFECTS = ("fadein", "fadeout", "slide_left", "slide_right", "slide_top", "slide_bottom", "rotate")
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert a hex color string like '#FF0000' to an (R, G, B) tuple."""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0] * 2 + h[1] * 2 + h[2] * 2
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
 def _default_clip_workers() -> int:
@@ -17,50 +41,179 @@ def _default_clip_workers() -> int:
     return max(1, min(4, cpu))
 
 
+def _silent_audio(duration: float, fps: int = 44100) -> AudioClip:
+    """Create a silent audio clip of the given duration."""
+    return AudioClip(
+        lambda t: [0, 0],
+        duration=duration,
+        fps=fps,
+    )
+
+
+def _pick_text_color(index: int, settings: RenderSettings) -> str:
+    """Pick text color by cycling through text_colors, falling back to text_color."""
+    if settings.text_colors:
+        return settings.text_colors[(index - 1) % len(settings.text_colors)]
+    return settings.text_color
+
+
+def _pick_effect_name(index: int, settings: RenderSettings) -> str | None:
+    """Pick an effect name by cycling through text_effects."""
+    if not settings.text_effects:
+        return None
+    return settings.text_effects[(index - 1) % len(settings.text_effects)]
+
+
+def _apply_text_effect(
+    text_clip: TextClip,
+    effect_name: str | None,
+    effect_duration: float,
+    canvas_width: int,
+    canvas_height: int,
+) -> tuple[TextClip, bool]:
+    """Apply a single text effect to the TextClip.
+
+    Returns
+    -------
+    (clip, handles_position) – *handles_position* is True when the effect
+    already sets the clip position (slide effects).  The caller must NOT
+    call ``with_position`` again in that case.
+    """
+    if not effect_name:
+        return text_clip, False
+
+    name = effect_name.lower().strip()
+
+    # --- pixel-based effects (don't touch position) --------------------------
+    if name == "fadein":
+        return text_clip.with_effects([vfx.FadeIn(effect_duration)]), False
+    elif name == "fadeout":
+        return text_clip.with_effects([vfx.FadeOut(effect_duration)]), False
+    elif name == "rotate":
+        # Animated rotation: eases from 15° to 0° over effect_duration.
+        start_angle = 15.0
+        def _rotation_angle(t: float) -> float:
+            if t >= effect_duration:
+                return 0.0
+            progress = t / effect_duration
+            return start_angle * (1.0 - progress)
+        return text_clip.with_effects(
+            [vfx.Rotate(_rotation_angle, expand=False)]
+        ), False
+
+    # --- position-based effects (custom slide to center) ---------------------
+    clip_w, clip_h = text_clip.size
+    center_x = (canvas_width - clip_w) / 2.0
+    center_y = (canvas_height - clip_h) / 2.0
+
+    if name == "slide_left":
+        def _pos(t: float) -> tuple[float, float]:
+            progress = min(t / effect_duration, 1.0)
+            x = -clip_w + (center_x + clip_w) * progress
+            return (x, center_y)
+        return text_clip.with_position(_pos), True
+    elif name == "slide_right":
+        def _pos(t: float) -> tuple[float, float]:
+            progress = min(t / effect_duration, 1.0)
+            x = canvas_width - (canvas_width - center_x) * progress
+            return (x, center_y)
+        return text_clip.with_position(_pos), True
+    elif name == "slide_top":
+        def _pos(t: float) -> tuple[float, float]:
+            progress = min(t / effect_duration, 1.0)
+            y = -clip_h + (center_y + clip_h) * progress
+            return (center_x, y)
+        return text_clip.with_position(_pos), True
+    elif name == "slide_bottom":
+        def _pos(t: float) -> tuple[float, float]:
+            progress = min(t / effect_duration, 1.0)
+            y = canvas_height - (canvas_height - center_y) * progress
+            return (center_x, y)
+        return text_clip.with_position(_pos), True
+
+    return text_clip, False
+
+
 def _create_single_clip(
     item: AudioItem,
-    images_dir: Path,
+    size: CanvasSize,
+    settings: RenderSettings,
     clips_dir: Path,
     fps: int,
     tts_start_offset: float,
     logger: logging.Logger | None,
 ) -> tuple[int, Path]:
-    image_path = images_dir / numbered_name(item.index, "png")
-    if not image_path.exists():
-        raise FileNotFoundError(f"Image not found for clip {item.index}: {image_path}")
-
     clip_path = clips_dir / numbered_name(item.index, "mp4")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loop",
-        "1",
-        "-framerate",
-        str(fps),
-        "-i",
-        str(image_path),
-        "-i",
-        str(item.audio_path),
-    ]
-    clip_delay = tts_start_offset if item.index == 1 else 0.0
-    if clip_delay > 0:
-        delay_ms = int(round(clip_delay * 1000))
-        cmd.extend(["-filter:a", f"adelay={delay_ms}:all=1"])
-    cmd.extend([
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-shortest",
-        str(clip_path),
-    ])
 
     last_exc: Exception | None = None
     for attempt in range(1, MAX_CLIP_RETRIES + 1):
         try:
-            run_cmd(cmd, logger=logger, check=True)
+            audio = AudioFileClip(str(item.audio_path))
+            clip_delay = tts_start_offset if item.index == 1 else 0.0
+            total_duration = audio.duration + clip_delay
+
+            # Background: solid color filling the full canvas.
+            bg = ColorClip(
+                size=(size.width, size.height),
+                color=_hex_to_rgb(settings.bg_color),
+                duration=total_duration,
+            ).with_fps(fps)
+
+            # Text clip: sentence rendered via MoviePy TextClip.
+            text_color = _pick_text_color(item.index, settings)
+            text = TextClip(
+                font=str(settings.font_path),
+                text=item.text,
+                font_size=settings.font_size,
+                color=text_color,
+                bg_color=None,
+                size=(size.width - settings.text_margin_x * 2, size.height - settings.text_margin_y * 2),
+                method="caption",
+                text_align="center",
+                horizontal_align="center",
+                vertical_align="center",
+                interline=int(settings.font_size * (settings.line_spacing - 1)),
+                transparent=True,
+                duration=total_duration,
+            )
+
+            # Apply effect (cycling).
+            effect_name = _pick_effect_name(item.index, settings)
+            text, handles_position = _apply_text_effect(
+                text, effect_name, settings.effect_duration,
+                canvas_width=size.width, canvas_height=size.height,
+            )
+
+            # Compose text on background.  If the effect already controls
+            # the position (e.g. slide effects) we must not override it.
+            if not handles_position:
+                text = text.with_position("center")
+
+            video = CompositeVideoClip(
+                [bg, text],
+                size=(size.width, size.height),
+            )
+
+            if clip_delay > 0:
+                silence = _silent_audio(clip_delay, fps=audio.fps or 44100)
+                composite_audio = CompositeAudioClip([
+                    silence.with_start(0),
+                    audio.with_start(clip_delay),
+                ]).with_duration(total_duration)
+                video = video.with_audio(composite_audio)
+            else:
+                video = video.with_audio(audio)
+
+            video.write_videofile(
+                str(clip_path),
+                fps=fps,
+                codec="libx264",
+                audio_codec="aac",
+                logger=None,
+            )
+            audio.close()
+            video.close()
+
             if logger:
                 logger.info("clip generated: %s", clip_path)
             return item.index, clip_path.resolve()
@@ -86,7 +239,9 @@ def _create_single_clip(
 
 def create_clips_for_mode(
     audio_items: list[AudioItem],
-    images_dir: Path,
+    sentences: list[str],
+    size: CanvasSize,
+    settings: RenderSettings,
     clips_dir: Path,
     fps: int,
     tts_start_offset: float = 1.0,
@@ -103,7 +258,8 @@ def create_clips_for_mode(
         for item in audio_items:
             index, path = _create_single_clip(
                 item=item,
-                images_dir=images_dir,
+                size=size,
+                settings=settings,
                 clips_dir=clips_dir,
                 fps=fps,
                 tts_start_offset=tts_start_offset,
@@ -119,7 +275,8 @@ def create_clips_for_mode(
             future = executor.submit(
                 _create_single_clip,
                 item,
-                images_dir,
+                size,
+                settings,
                 clips_dir,
                 fps,
                 tts_start_offset,
@@ -166,26 +323,44 @@ def concat_mode_video(
     logger: logging.Logger | None = None,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(concat_file),
-        "-r",
-        str(fps),
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        str(output_path),
-    ]
-    run_cmd(cmd, logger=logger, check=True)
+
+    # Parse the concat file to get the list of clip paths
+    clip_paths: list[str] = []
+    for line in concat_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("file '") and line.endswith("'"):
+            path_str = line[6:-1].replace("'\\'", "'")
+            clip_paths.append(path_str)
+
+    if not clip_paths:
+        raise ValueError(f"No clips found in concat file: {concat_file}")
+
+    clips = []
+    for p in clip_paths:
+        clip = VideoFileClip(p)
+        # Trim a tiny epsilon to avoid reading past the last frame
+        safe_duration = clip.duration - 1.0 / fps
+        if safe_duration > 0:
+            clip = clip.subclipped(0, safe_duration)
+        clips.append(clip)
+
+    try:
+        final = concatenate_videoclips(clips, method="compose")
+        final.write_videofile(
+            str(output_path),
+            fps=fps,
+            codec="libx264",
+            audio_codec="aac",
+            logger=None,
+        )
+    finally:
+        for clip in clips:
+            clip.close()
+        try:
+            final.close()
+        except Exception:
+            pass
+
     if logger:
         logger.info("%s output generated: %s", mode, output_path)
     return output_path.resolve()
@@ -204,28 +379,24 @@ def overlay_cover_on_first_frame(
 
     frame_window = 1.0 / float(fps)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(video_path),
-        "-i",
-        str(cover_path),
-        "-filter_complex",
-        f"[0:v]setpts=PTS-STARTPTS[v0];[v0][1:v]overlay=0:0:enable='lte(t,{frame_window:.6f})'[vout]",
-        "-map",
-        "[vout]",
-        "-map",
-        "0:a?",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "copy",
-        str(output_path),
-    ]
-    run_cmd(cmd, logger=logger, check=True)
+
+    video = VideoFileClip(str(video_path))
+    cover = ImageClip(str(cover_path)).with_duration(frame_window)
+
+    final = CompositeVideoClip([video, cover])
+    try:
+        final.write_videofile(
+            str(output_path),
+            fps=fps,
+            codec="libx264",
+            audio_codec="aac",
+            logger=None,
+        )
+    finally:
+        video.close()
+        cover.close()
+        final.close()
+
     if logger:
         logger.info("cover overlaid on first frame: %s", output_path)
     return output_path.resolve()

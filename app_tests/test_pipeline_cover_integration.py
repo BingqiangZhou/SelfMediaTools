@@ -46,19 +46,6 @@ def test_run_cover_overlay_called_for_both_modes(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr(pipeline_main, "generate_tts", fake_generate_tts)
 
-    def fake_render_images_for_mode(*, sentences, mode, size, settings, overlay_resolver, out_dir, logger, max_workers):
-        out_dir.mkdir(parents=True, exist_ok=True)
-        outputs = []
-        for idx in range(1, len(sentences) + 1):
-            p = out_dir / f"{idx:04d}.png"
-            p.write_bytes(b"img")
-            outputs.append(p)
-        return outputs
-
-    monkeypatch.setattr(pipeline_main, "render_images_for_mode", fake_render_images_for_mode)
-
-    cover_calls: list[str] = []
-
     def fake_render_cover_image(*, mode, size, settings, theme_keyword, font_path, out_dir, logger):
         p = out_dir / "0000_cover.png"
         p.write_bytes(b"cover")
@@ -66,7 +53,9 @@ def test_run_cover_overlay_called_for_both_modes(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr(pipeline_main, "render_cover_image", fake_render_cover_image)
 
-    def fake_create_clips_for_mode(*, audio_items, images_dir, clips_dir, fps, tts_start_offset, logger, max_workers):
+    cover_calls: list[str] = []
+
+    def fake_create_clips_for_mode(*, audio_items, sentences, size, settings, clips_dir, fps, tts_start_offset, logger, max_workers):
         clips_dir.mkdir(parents=True, exist_ok=True)
         outputs = []
         for item in audio_items:
@@ -104,13 +93,6 @@ def test_run_cover_overlay_called_for_both_modes(monkeypatch, tmp_path: Path) ->
     assert len(outputs) == 2
     assert sorted(cover_calls) == ["final_cover_raw_landscape.mp4", "final_cover_raw_portrait.mp4"]
 
-    run_dir = outputs[0].parents[1]
-    manifest_path = run_dir / "02_images" / "image_manifest.json"
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    cover_entries = [item for item in data if item.get("type") == "cover"]
-    assert len(cover_entries) == 2
-    assert {item["mode"] for item in cover_entries} == {"portrait", "landscape"}
-
 
 def test_run_cover_overlay_skipped_when_disabled(monkeypatch, tmp_path: Path) -> None:
     args = _build_args(tmp_path, cover_enabled=False)
@@ -126,11 +108,6 @@ def test_run_cover_overlay_skipped_when_disabled(monkeypatch, tmp_path: Path) ->
         ],
     )
 
-    monkeypatch.setattr(
-        pipeline_main,
-        "render_images_for_mode",
-        lambda **kwargs: [Path(kwargs["out_dir"]) / "0001.png"],
-    )
     monkeypatch.setattr(
         pipeline_main,
         "render_cover_image",

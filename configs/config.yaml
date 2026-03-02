@@ -14,7 +14,6 @@ portrait_size: 1080x1920
 landscape_size: 1920x1080
 fps: 30
 tts_workers: 4
-image_workers: 4
 clip_workers: 2
 work_dir: output
 
@@ -27,21 +26,28 @@ text_margin_x: 80
 text_margin_y: 60
 bg_color: "#000000"
 text_color: "#FFFFFF"
+text_colors:
+  - "#FFFFFF"
+  - "#FFD700"
+  - "#00BFFF"
+  - "#FF6347"
+  - "#7CFC00"
+
+# Text effects (cycling per sentence)
+text_effects:
+  - fadein
+  - slide_left
+  - slide_right
+  - slide_top
+  - slide_bottom
+  - rotate
+effect_duration: 0.5
 
 # Cover first-frame
 theme_keyword: null
 cover_enabled: true
 cover_bg_color: "#000000"
 cover_text_color: "#D00000"
-
-# Overlay
-overlay_image: ./image.jpg
-overlay_dir: null
-overlay_height_ratio: 0.35
-overlay_box_width_ratio: 0.68
-overlay_fit: cover
-overlay_top_margin: 48
-overlay_text_gap: 12
 
 # BGM (optional)
 bgm:

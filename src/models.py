@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -24,11 +24,9 @@ class RenderSettings:
     text_margin_y: int
     bg_color: str
     text_color: str
-    overlay_height_ratio: float
-    overlay_box_width_ratio: float
-    overlay_fit: Literal["cover", "contain"]
-    overlay_top_margin: int
-    overlay_text_gap: int
+    text_colors: tuple[str, ...] = ()
+    text_effects: tuple[str, ...] = ()
+    effect_duration: float = 0.5
 
 
 @dataclass(frozen=True)
