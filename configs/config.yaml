@@ -3,13 +3,13 @@ text: null
 text_file: examples/sample_input.txt
 
 # TTS
-voice: zh-CN-XiaoxiaoNeural
-rate: "+0%"
-volume: "+0%"
+voice: zh-CN-YunjianNeural #zh-CN-YunyangNeural #zh-CN-XiaoxiaoNeural
+rate: "+50%"
+volume: "+25%"
 tts_start_offset: 1.0
 
 # Output modes: portrait, landscape, or both
-output_modes: portrait,landscape
+output_modes: landscape
 portrait_size: 1080x1920
 landscape_size: 1920x1080
 fps: 30
@@ -52,7 +52,7 @@ cover_text_color: "#D00000"
 # BGM (optional)
 bgm:
   enabled: true
-  file: ./bgm.mp3
+  file: E:/Projects/Works/SelfMediaTools/assets/bgm.mp3
   volume: 0.18
   fade_in: 1.5
   fade_out: 1.5
