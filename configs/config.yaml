@@ -6,7 +6,7 @@ text_file: examples/sample_input.txt
 voice: zh-CN-YunjianNeural #zh-CN-YunyangNeural #zh-CN-XiaoxiaoNeural
 rate: "+25%"
 volume: "+50%"
-tts_start_offset: 1.0
+tts_start_offset: 0.2
 
 # Output modes: portrait, landscape, or both
 output_modes: landscape
@@ -58,7 +58,7 @@ cover_text_color: "#D00000"
 bgm:
   enabled: true
   file: E:/Projects/Works/SelfMediaTools/assets/bgm.mp3
-  volume: 0.18
-  fade_in: 1.5
-  fade_out: 1.5
+  volume: 0.27
+  fade_in: 0.3
+  fade_out: 1
   audio_bitrate: "192k"
