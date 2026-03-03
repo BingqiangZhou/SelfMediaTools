@@ -78,6 +78,12 @@ Cover first-frame example:
 uv run python main.py --config configs/config.yaml --theme-keyword "天命之人" --cover-enabled true
 ```
 
+Caption style example:
+
+```bash
+uv run python main.py --config configs/config.yaml --caption-style lyrics
+```
+
 ## Required Config Keys
 
 - Input: `text` or `text_file` (at least one)
@@ -89,6 +95,7 @@ uv run python main.py --config configs/config.yaml --theme-keyword "天命之人
 - `cover_bg_color`: cover background color
 - `cover_text_color`: cover text color
 - TTS start: `tts_start_offset` controls when the first TTS segment starts (seconds, default `1.0`)
+- Caption style: `caption_style` supports `classic` (existing single text + optional effects) or `lyrics` (3-line lyric style with highlighted current line + dim neighbors + smooth scroll)
 - Overlay layout tuning:
 - `overlay_height_ratio`: overlay box height ratio of canvas
 - `overlay_box_width_ratio`: max overlay side ratio by width (overlay uses a square box in both modes)

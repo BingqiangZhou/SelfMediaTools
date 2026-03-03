@@ -25,6 +25,7 @@ def test_cover_config_merge_and_cli_override(tmp_path: Path) -> None:
                 "cover_enabled: false",
                 "cover_bg_color: \"#010203\"",
                 "cover_text_color: \"#AA0000\"",
+                "caption_style: lyrics",
             ]
         ),
     )
@@ -38,6 +39,8 @@ def test_cover_config_merge_and_cli_override(tmp_path: Path) -> None:
             "true",
             "--theme-keyword",
             "新关键词",
+            "--caption-style",
+            "classic",
         ]
     )
     merged = pipeline_main._merge_args(raw)
@@ -46,6 +49,7 @@ def test_cover_config_merge_and_cli_override(tmp_path: Path) -> None:
     assert merged.theme_keyword == "新关键词"
     assert merged.cover_bg_color == "#010203"
     assert merged.cover_text_color == "#AA0000"
+    assert merged.caption_style == "classic"
 
 
 def test_theme_keyword_fallback() -> None:

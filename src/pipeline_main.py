@@ -42,6 +42,7 @@ DEFAULTS: dict[str, Any] = {
     "use_text_effects": False,
     "random_color": False,
     "random_effect": False,
+    "caption_style": "classic",
     "fps": 30,
     "tts_workers": 4,
     "clip_workers": 2,
@@ -110,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-text-effects", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Enable text effects (default: false)")
     parser.add_argument("--random-color", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Use random text colors (default: false)")
     parser.add_argument("--random-effect", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Use random text effects (default: false)")
+    parser.add_argument("--caption-style", type=str, default=None, help="Caption style: classic or lyrics")
 
     parser.add_argument("--fps", type=int, default=None)
     parser.add_argument("--tts-workers", type=int, default=None)
@@ -304,6 +306,9 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
     else:
         resolved["text_effects"] = []
 
+    caption_style = str(resolved.get("caption_style", "classic")).strip().lower()
+    resolved["caption_style"] = caption_style or "classic"
+
     modes_value = resolved.get("output_modes")
     if isinstance(modes_value, list):
         resolved["output_modes"] = ",".join(str(item) for item in modes_value)
@@ -366,6 +371,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("tts_workers/clip_workers must be > 0")
     if args.effect_duration < 0:
         raise ValueError("effect_duration must be >= 0")
+    if args.caption_style not in {"classic", "lyrics"}:
+        raise ValueError("caption_style must be one of: classic, lyrics")
 
     if args.bgm_volume < 0:
         raise ValueError("bgm_volume must be >= 0")
@@ -472,6 +479,7 @@ def run(args: argparse.Namespace) -> list[Path]:
         use_text_effects=args.use_text_effects,
         random_color=args.random_color,
         random_effect=args.random_effect,
+        caption_style=args.caption_style,
     )
     cover_settings = CoverSettings(
         bg_color=args.cover_bg_color,

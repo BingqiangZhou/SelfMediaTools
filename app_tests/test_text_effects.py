@@ -59,6 +59,7 @@ def test_text_effects(tmp_path: Path) -> None:
         
         idx, out_path = _create_single_clip(
             item=item,
+            sentences=[item.text],
             size=size,
             settings=settings,
             clips_dir=clips_dir,

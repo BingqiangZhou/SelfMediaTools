@@ -47,6 +47,7 @@ effect_duration: 0.5
 use_text_effects: false
 random_color: false
 random_effect: false
+caption_style: classic
 
 # Cover first-frame
 theme_keyword: "即将起飞"

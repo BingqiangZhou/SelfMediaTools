@@ -6,6 +6,7 @@ from typing import Literal
 
 
 OutputMode = Literal["portrait", "landscape"]
+CaptionStyle = Literal["classic", "lyrics"]
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class RenderSettings:
     use_text_effects: bool = False
     random_color: bool = False
     random_effect: bool = False
+    caption_style: CaptionStyle = "classic"
 
 
 @dataclass(frozen=True)

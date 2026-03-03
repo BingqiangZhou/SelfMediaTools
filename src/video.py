@@ -26,6 +26,9 @@ MAX_CLIP_RETRIES = 3
 
 # Supported text effect names for cycling.
 SUPPORTED_EFFECTS = ("fadein", "fadeout", "slide_left", "slide_right", "slide_top", "slide_bottom", "rotate")
+LYRICS_CONTEXT_OPACITY = 0.35
+LYRICS_VISIBLE_LINES = 5
+LYRICS_CURRENT_SCALE = 1.18
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -195,8 +198,118 @@ def _apply_text_effect(
     return text_clip, False
 
 
+def _caption_box_size(size: CanvasSize, settings: RenderSettings) -> tuple[int, int]:
+    return (
+        max(1, size.width - settings.text_margin_x * 2),
+        max(1, size.height - settings.text_margin_y * 2),
+    )
+
+
+def _build_caption_text_clip(
+    *,
+    text: str,
+    color: str,
+    box_size: tuple[int, int],
+    settings: RenderSettings,
+    duration: float,
+    text_align: str = "center",
+    horizontal_align: str = "center",
+    font_size: int | None = None,
+) -> TextClip:
+    return TextClip(
+        font=str(settings.font_path),
+        text=text,
+        font_size=font_size or settings.font_size,
+        color=color,
+        bg_color=None,
+        size=box_size,
+        method="caption",
+        text_align=text_align,
+        horizontal_align=horizontal_align,
+        vertical_align="center",
+        interline=int(settings.font_size * (settings.line_spacing - 1)),
+        transparent=True,
+        duration=duration,
+    )
+
+
+def _ease_out_quad(progress: float) -> float:
+    clamped = min(max(progress, 0.0), 1.0)
+    return 1.0 - (1.0 - clamped) * (1.0 - clamped)
+
+
+def _build_lyrics_text_clips(
+    *,
+    item: AudioItem,
+    sentences: list[str],
+    size: CanvasSize,
+    settings: RenderSettings,
+    total_duration: float,
+) -> list[TextClip]:
+    clip_w, _ = _caption_box_size(size, settings)
+    context_font_size = settings.font_size
+    current_font_size = max(context_font_size + 2, int(round(context_font_size * LYRICS_CURRENT_SCALE)))
+    layout_font_size = max(context_font_size, current_font_size)
+    line_gap = max(1, int(layout_font_size * settings.line_spacing * 0.95))
+    line_box_h = max(layout_font_size + 10, int(layout_font_size * settings.line_spacing * 1.4))
+    line_box_size = (clip_w, line_box_h)
+    center_x = (size.width - clip_w) / 2.0
+    center_y = size.height / 2.0
+
+    current_idx = item.index - 1
+    current_text = item.text
+    if 0 <= current_idx < len(sentences):
+        current_text = sentences[current_idx]
+    scroll_duration = min(0.45, total_duration * 0.35) if total_duration > 0 else 0.0
+    should_scroll = current_idx > 0 and len(sentences) > 1 and scroll_duration > 0.0
+
+    def _scroll_offset(t: float) -> float:
+        if not should_scroll:
+            return 0.0
+        if t <= 0.0:
+            return float(line_gap)
+        if t >= scroll_duration:
+            return 0.0
+        progress = _ease_out_quad(t / scroll_duration)
+        return float(line_gap) * (1.0 - progress)
+
+    def _line_pos(base_center_y: float):
+        def _pos(t: float) -> tuple[float, float]:
+            y = base_center_y + _scroll_offset(t) - (line_box_h / 2.0)
+            return (center_x, y)
+        return _pos
+
+    clips: list[TextClip] = []
+    context_rows = max(1, (LYRICS_VISIBLE_LINES - 1) // 2)
+    for rel in range(-context_rows, context_rows + 1):
+        sentence_idx = current_idx + rel
+        text = ""
+        if 0 <= sentence_idx < len(sentences):
+            text = sentences[sentence_idx]
+        if not text.strip():
+            continue
+        row_center_y = center_y + rel * line_gap
+        opacity = 1.0 if rel == 0 else LYRICS_CONTEXT_OPACITY
+        row_font_size = current_font_size if rel == 0 else context_font_size
+        clip = _build_caption_text_clip(
+            text=text,
+            color=settings.text_color,
+            box_size=line_box_size,
+            settings=settings,
+            duration=total_duration,
+            text_align="center",
+            horizontal_align="center",
+            font_size=row_font_size,
+        ).with_position(_line_pos(row_center_y))
+        if opacity < 1.0:
+            clip = clip.with_opacity(opacity)
+        clips.append(clip)
+    return clips
+
+
 def _create_single_clip(
     item: AudioItem,
+    sentences: list[str],
     size: CanvasSize,
     settings: RenderSettings,
     clips_dir: Path,
@@ -220,38 +333,41 @@ def _create_single_clip(
                 duration=total_duration,
             ).with_fps(fps)
 
-            # Text clip: sentence rendered via MoviePy TextClip.
-            text_color = _pick_text_color(item.index, settings)
-            text = TextClip(
-                font=str(settings.font_path),
-                text=item.text,
-                font_size=settings.font_size,
-                color=text_color,
-                bg_color=None,
-                size=(size.width - settings.text_margin_x * 2, size.height - settings.text_margin_y * 2),
-                method="caption",
-                text_align="center",
-                horizontal_align="center",
-                vertical_align="center",
-                interline=int(settings.font_size * (settings.line_spacing - 1)),
-                transparent=True,
-                duration=total_duration,
-            )
+            text_layers: list[TextClip] = []
+            if settings.caption_style == "lyrics":
+                text_layers = _build_lyrics_text_clips(
+                    item=item,
+                    sentences=sentences,
+                    size=size,
+                    settings=settings,
+                    total_duration=total_duration,
+                )
+            else:
+                # Text clip: sentence rendered via MoviePy TextClip.
+                text_color = _pick_text_color(item.index, settings)
+                text = _build_caption_text_clip(
+                    text=item.text,
+                    color=text_color,
+                    box_size=_caption_box_size(size, settings),
+                    settings=settings,
+                    duration=total_duration,
+                )
 
-            # Apply effect (cycling).
-            effect_name = _pick_effect_name(item.index, settings)
-            text, handles_position = _apply_text_effect(
-                text, effect_name, settings.effect_duration,
-                canvas_width=size.width, canvas_height=size.height,
-            )
+                # Apply effect (cycling).
+                effect_name = _pick_effect_name(item.index, settings)
+                text, handles_position = _apply_text_effect(
+                    text, effect_name, settings.effect_duration,
+                    canvas_width=size.width, canvas_height=size.height,
+                )
 
-            # Compose text on background.  If the effect already controls
-            # the position (e.g. slide effects) we must not override it.
-            if not handles_position:
-                text = text.with_position("center")
+                # Compose text on background. If the effect already controls
+                # the position (e.g. slide effects) we must not override it.
+                if not handles_position:
+                    text = text.with_position("center")
+                text_layers = [text]
 
             video = CompositeVideoClip(
-                [bg, text],
+                [bg, *text_layers],
                 size=(size.width, size.height),
             )
 
@@ -321,6 +437,7 @@ def create_clips_for_mode(
         for item in audio_items:
             index, path = _create_single_clip(
                 item=item,
+                sentences=sentences,
                 size=size,
                 settings=settings,
                 clips_dir=clips_dir,
@@ -338,6 +455,7 @@ def create_clips_for_mode(
             future = executor.submit(
                 _create_single_clip,
                 item,
+                sentences,
                 size,
                 settings,
                 clips_dir,
