@@ -7,6 +7,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from PIL import ImageFont
 from moviepy import (
     AudioFileClip,
     ColorClip,
@@ -28,7 +29,8 @@ MAX_CLIP_RETRIES = 3
 SUPPORTED_EFFECTS = ("fadein", "fadeout", "slide_left", "slide_right", "slide_top", "slide_bottom", "rotate")
 LYRICS_CONTEXT_OPACITY = 0.35
 LYRICS_VISIBLE_LINES = 5
-LYRICS_CURRENT_SCALE = 1.18
+LYRICS_CURRENT_SCALE = 1.5
+LYRICS_CURRENT_MAX_WIDTH_RATIO = 0.92
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -216,10 +218,11 @@ def _build_caption_text_clip(
     horizontal_align: str = "center",
     font_size: int | None = None,
 ) -> TextClip:
+    actual_font_size = font_size or settings.font_size
     return TextClip(
         font=str(settings.font_path),
         text=text,
-        font_size=font_size or settings.font_size,
+        font_size=actual_font_size,
         color=color,
         bg_color=None,
         size=box_size,
@@ -227,7 +230,7 @@ def _build_caption_text_clip(
         text_align=text_align,
         horizontal_align=horizontal_align,
         vertical_align="center",
-        interline=int(settings.font_size * (settings.line_spacing - 1)),
+        interline=int(actual_font_size * (settings.line_spacing - 1)),
         transparent=True,
         duration=duration,
     )
@@ -236,6 +239,35 @@ def _build_caption_text_clip(
 def _ease_out_quad(progress: float) -> float:
     clamped = min(max(progress, 0.0), 1.0)
     return 1.0 - (1.0 - clamped) * (1.0 - clamped)
+
+
+def _measure_text_width(text: str, font_path: Path, font_size: int) -> int:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return 0
+    try:
+        font = ImageFont.truetype(str(font_path), size=font_size)
+        left, top, right, bottom = font.getbbox(cleaned)
+        return max(0, right - left)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _fit_single_line_font_size(
+    *,
+    text: str,
+    font_path: Path,
+    target_size: int,
+    min_size: int,
+    max_width: int,
+) -> int:
+    if max_width <= 0:
+        return max(min_size, target_size)
+
+    for candidate in range(target_size, min_size - 1, -1):
+        if _measure_text_width(text, font_path, candidate) <= max_width:
+            return candidate
+    return min_size
 
 
 def _build_lyrics_text_clips(
@@ -247,8 +279,23 @@ def _build_lyrics_text_clips(
     total_duration: float,
 ) -> list[TextClip]:
     clip_w, _ = _caption_box_size(size, settings)
+    current_idx = item.index - 1
+    current_text = item.text
+    if 0 <= current_idx < len(sentences):
+        current_text = sentences[current_idx]
+
     context_font_size = settings.font_size
-    current_font_size = max(context_font_size + 2, int(round(context_font_size * LYRICS_CURRENT_SCALE)))
+    target_current_font_size = max(context_font_size + 2, int(round(context_font_size * LYRICS_CURRENT_SCALE)))
+    fit_min_size = max(settings.min_font_size, 1)
+    max_single_line_width = int(clip_w * LYRICS_CURRENT_MAX_WIDTH_RATIO)
+    current_font_size = _fit_single_line_font_size(
+        text=current_text,
+        font_path=settings.font_path,
+        target_size=target_current_font_size,
+        min_size=fit_min_size,
+        max_width=max_single_line_width,
+    )
+
     layout_font_size = max(context_font_size, current_font_size)
     line_gap = max(1, int(layout_font_size * settings.line_spacing * 0.95))
     line_box_h = max(layout_font_size + 10, int(layout_font_size * settings.line_spacing * 1.4))
@@ -256,10 +303,6 @@ def _build_lyrics_text_clips(
     center_x = (size.width - clip_w) / 2.0
     center_y = size.height / 2.0
 
-    current_idx = item.index - 1
-    current_text = item.text
-    if 0 <= current_idx < len(sentences):
-        current_text = sentences[current_idx]
     scroll_duration = min(0.45, total_duration * 0.35) if total_duration > 0 else 0.0
     should_scroll = current_idx > 0 and len(sentences) > 1 and scroll_duration > 0.0
 

@@ -68,6 +68,7 @@ text_margin_x: 80
 text_margin_y: 60
 bg_color: "#000000"
 text_color: "#FFFFFF"
+caption_style: lyrics
 bgm_enabled: false
 bgm_file: ./assets/bgm.MP3
 bgm_volume: 0.18
@@ -98,6 +99,7 @@ bgm_fade_out: 1.5
 - text_margin_y: 垂直边距
 - bg_color: 背景色
 - text_color: 主文字颜色
+- caption_style: 字幕样式 (classic/lyrics)，默认为 lyrics
 
 ### BGM 设置
 - bgm_enabled: 是否启用BGM
@@ -149,7 +151,7 @@ uv run main.py --config configs/1.yaml --text "..." --theme-keyword "..."
 
 - **TTS语音设置**: voice、rate、volume、tts_start_offset
 - **输出设置**: output_modes、portrait_size、landscape_size、fps
-- **渲染设置**: font_path、font_size、bg_color、text_color、text_colors、text_effects
+- **渲染设置**: font_path、font_size、bg_color、text_color、caption_style、text_colors、text_effects
 - **封面设置**: theme_keyword、cover_enabled、cover_bg_color、cover_text_color
 - **BGM设置**: bgm_enabled、bgm_file、bgm_volume、bgm_fade_in、bgm_fade_out
 - **并发设置**: tts_workers、clip_workers

@@ -5,7 +5,7 @@ text_file: null
 # TTS
 voice: zh-CN-YunjianNeural #zh-CN-YunyangNeural #zh-CN-XiaoxiaoNeural
 rate: "+25%"
-volume: "+0%"
+volume: "+50%"
 tts_start_offset: 0.2
 
 # Output modes: portrait, landscape, or both
@@ -47,7 +47,7 @@ effect_duration: 0.5
 use_text_effects: false
 random_color: false
 random_effect: false
-caption_style: classic
+caption_style: lyrics #classic
 
 # Cover first-frame
 theme_keyword: "即将起飞"
