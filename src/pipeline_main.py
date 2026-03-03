@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from bgm import mix_bgm
-from ffmpeg_utils import ensure_ffmpeg_tools
+from ffmpeg_utils import ensure_ffmpeg_subtitle_filters, ensure_ffmpeg_tools
 from io_utils import parse_output_modes, parse_size, prepare_output_dirs, read_text_input
 from models import CanvasSize, CoverSettings, OutputMode, RenderSettings
 from render_cards import render_cover_image
@@ -45,6 +45,8 @@ DEFAULTS: dict[str, Any] = {
     "subtitle_render_mode": "classic",
     "flip_big_style": "progressive",
     "flip_big_max_lines": 3,
+    "flip_big_anchor_y_ratio": 0.56,
+    "flip_big_sentence_anchor_y_ratio": 0.50,
     "fps": 30,
     "tts_workers": 4,
     "clip_workers": 2,
@@ -116,6 +118,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subtitle-render-mode", type=str, choices=("classic", "flip_big"), default=None)
     parser.add_argument("--flip-big-style", type=str, choices=("progressive", "sentence"), default=None)
     parser.add_argument("--flip-big-max-lines", type=int, default=None)
+    parser.add_argument("--flip-big-anchor-y-ratio", type=float, default=None)
+    parser.add_argument("--flip-big-sentence-anchor-y-ratio", type=float, default=None)
 
     parser.add_argument("--fps", type=int, default=None)
     parser.add_argument("--tts-workers", type=int, default=None)
@@ -274,6 +278,8 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
         "bgm_volume",
         "bgm_fade_in",
         "bgm_fade_out",
+        "flip_big_anchor_y_ratio",
+        "flip_big_sentence_anchor_y_ratio",
     ):
         resolved[key] = float(resolved[key])
 
@@ -385,6 +391,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("effect_duration must be >= 0")
     if args.flip_big_max_lines < 1:
         raise ValueError("flip_big_max_lines must be >= 1")
+    if not (0.0 <= args.flip_big_anchor_y_ratio <= 1.0):
+        raise ValueError("flip_big_anchor_y_ratio must be between 0 and 1")
+    if not (0.0 <= args.flip_big_sentence_anchor_y_ratio <= 1.0):
+        raise ValueError("flip_big_sentence_anchor_y_ratio must be between 0 and 1")
     if args.subtitle_render_mode not in {"classic", "flip_big"}:
         raise ValueError("subtitle_render_mode must be one of: classic, flip_big")
     if args.flip_big_style not in {"progressive", "sentence"}:
@@ -440,6 +450,8 @@ def _resolve_theme_keyword(raw_value: Any) -> str:
 def run(args: argparse.Namespace) -> list[Path]:
     _validate_args(args)
     ensure_ffmpeg_tools()
+    if args.subtitle_render_mode == "flip_big":
+        ensure_ffmpeg_subtitle_filters()
 
     modes = parse_output_modes(args.output_modes)
     is_multi_mode = len(modes) > 1
@@ -498,6 +510,8 @@ def run(args: argparse.Namespace) -> list[Path]:
         subtitle_render_mode=args.subtitle_render_mode,
         flip_big_style=args.flip_big_style,
         flip_big_max_lines=args.flip_big_max_lines,
+        flip_big_anchor_y_ratio=args.flip_big_anchor_y_ratio,
+        flip_big_sentence_anchor_y_ratio=args.flip_big_sentence_anchor_y_ratio,
     )
     cover_settings = CoverSettings(
         bg_color=args.cover_bg_color,
@@ -507,10 +521,13 @@ def run(args: argparse.Namespace) -> list[Path]:
     logger.info("theme_keyword: %s", theme_keyword)
     logger.info("cover_enabled: %s", args.cover_enabled)
     logger.info(
-        "subtitle_render_mode=%s flip_big_style=%s flip_big_max_lines=%d",
+        "subtitle_render_mode=%s flip_big_style=%s flip_big_max_lines=%d "
+        "flip_big_anchor_y_ratio=%.2f flip_big_sentence_anchor_y_ratio=%.2f",
         args.subtitle_render_mode,
         args.flip_big_style,
         args.flip_big_max_lines,
+        args.flip_big_anchor_y_ratio,
+        args.flip_big_sentence_anchor_y_ratio,
     )
     sizes = _mode_sizes(args)
 

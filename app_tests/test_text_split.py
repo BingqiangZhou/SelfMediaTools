@@ -18,3 +18,15 @@ def test_split_keeps_punctuation_clusters() -> None:
         "\u4f60\u5462?",
     ]
 
+
+def test_split_does_not_break_decimals_or_commas() -> None:
+    text = "\u4eca\u5929\u80a1\u4ef7\u4e0a\u6da83.5%\uff0c\u4f46\u660e\u5929\u53ef\u80fd\u56de\u8c03\u3002"
+    assert split_sentences(text) == [
+        "\u4eca\u5929\u80a1\u4ef7\u4e0a\u6da83.5%\uff0c\u4f46\u660e\u5929\u53ef\u80fd\u56de\u8c03\u3002",
+    ]
+
+
+def test_split_does_not_break_english_abbreviation_dots() -> None:
+    text = "Version 3.14 is stable, e.g. use it."
+    assert split_sentences(text) == ["Version 3.14 is stable, e.g. use it."]
+

@@ -28,6 +28,18 @@ def ensure_ffmpeg_tools() -> None:
     )
 
 
+def ensure_ffmpeg_subtitle_filters() -> None:
+    cmd = ["ffmpeg", "-hide_banner", "-filters"]
+    completed = run_cmd(cmd, logger=None, check=True)
+    filters = (completed.stdout or "") + "\n" + (completed.stderr or "")
+    if " ass " in filters and " subtitles " in filters:
+        return
+    raise RuntimeError(
+        "Current ffmpeg build does not support libass subtitle filters (ass/subtitles).\n"
+        "Please install a full ffmpeg build with libass enabled."
+    )
+
+
 def run_cmd(
     cmd: list[str],
     logger: logging.Logger | None = None,

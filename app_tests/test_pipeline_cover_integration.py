@@ -1,13 +1,17 @@
 ﻿from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pipeline_main
 from models import AudioItem
 
 
-def _build_args(tmp_path: Path, *, cover_enabled: bool = True):
+def _build_args(
+    tmp_path: Path,
+    *,
+    cover_enabled: bool = True,
+    subtitle_render_mode: str = "classic",
+):
     font_file = tmp_path / "font.ttf"
     font_file.write_bytes(b"dummy")
 
@@ -24,6 +28,8 @@ def _build_args(tmp_path: Path, *, cover_enabled: bool = True):
             "portrait,landscape",
             "--cover-enabled",
             "true" if cover_enabled else "false",
+            "--subtitle-render-mode",
+            subtitle_render_mode,
         ]
     )
     return pipeline_main._merge_args(raw)
@@ -33,6 +39,7 @@ def test_run_cover_overlay_called_for_both_modes(monkeypatch, tmp_path: Path) ->
     args = _build_args(tmp_path, cover_enabled=True)
 
     monkeypatch.setattr(pipeline_main, "ensure_ffmpeg_tools", lambda: None)
+    monkeypatch.setattr(pipeline_main, "ensure_ffmpeg_subtitle_filters", lambda: None)
     monkeypatch.setattr(pipeline_main, "split_sentences", lambda _text: ["第一句。", "第二句。"])
 
     def fake_generate_tts(*, sentences, audio_dir, voice, rate, volume, logger, max_workers):
@@ -98,6 +105,7 @@ def test_run_cover_overlay_skipped_when_disabled(monkeypatch, tmp_path: Path) ->
     args = _build_args(tmp_path, cover_enabled=False)
 
     monkeypatch.setattr(pipeline_main, "ensure_ffmpeg_tools", lambda: None)
+    monkeypatch.setattr(pipeline_main, "ensure_ffmpeg_subtitle_filters", lambda: None)
     monkeypatch.setattr(pipeline_main, "split_sentences", lambda _text: ["第一句。"])
 
     monkeypatch.setattr(
@@ -143,3 +151,49 @@ def test_run_cover_overlay_skipped_when_disabled(monkeypatch, tmp_path: Path) ->
 
     assert len(outputs) == 2
     assert called["overlay"] is False
+
+
+def test_run_checks_libass_for_flip_big(monkeypatch, tmp_path: Path) -> None:
+    args = _build_args(tmp_path, cover_enabled=False, subtitle_render_mode="flip_big")
+
+    monkeypatch.setattr(pipeline_main, "ensure_ffmpeg_tools", lambda: None)
+    calls = {"subtitle_filters": 0}
+
+    def fake_ensure_subtitle_filters() -> None:
+        calls["subtitle_filters"] += 1
+
+    monkeypatch.setattr(pipeline_main, "ensure_ffmpeg_subtitle_filters", fake_ensure_subtitle_filters)
+    monkeypatch.setattr(pipeline_main, "split_sentences", lambda _text: ["第一句。"])
+    monkeypatch.setattr(
+        pipeline_main,
+        "generate_tts",
+        lambda **kwargs: [
+            AudioItem(index=1, text="第一句。", audio_path=Path(kwargs["audio_dir"]) / "0001.mp3", duration=1.0)
+        ],
+    )
+    monkeypatch.setattr(
+        pipeline_main,
+        "render_cover_image",
+        lambda **kwargs: Path(kwargs["out_dir"]) / "0000_cover.png",
+    )
+    monkeypatch.setattr(
+        pipeline_main,
+        "create_clips_for_mode",
+        lambda **kwargs: [Path(kwargs["clips_dir"]) / "0001.mp4"],
+    )
+    monkeypatch.setattr(
+        pipeline_main,
+        "write_concat_file",
+        lambda **kwargs: Path(kwargs["concat_dir"]) / kwargs["file_name"],
+    )
+    def fake_concat_mode_video(*, mode, concat_file, output_path, fps, logger):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"raw")
+        return output_path
+
+    monkeypatch.setattr(pipeline_main, "concat_mode_video", fake_concat_mode_video)
+
+    outputs = pipeline_main.run(args)
+
+    assert len(outputs) == 2
+    assert calls["subtitle_filters"] == 1

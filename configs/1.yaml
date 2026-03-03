@@ -49,9 +49,11 @@ random_color: false
 random_effect: false
 
 # Subtitle render mode
-subtitle_render_mode: classic # classic | flip_big
+subtitle_render_mode: classic # classic | flip_big (SRT+ASS burn-in)
 flip_big_style: progressive   # progressive | sentence
 flip_big_max_lines: 3
+flip_big_anchor_y_ratio: 0.56
+flip_big_sentence_anchor_y_ratio: 0.50
 
 # Cover first-frame
 theme_keyword: "即将起飞"

@@ -95,9 +95,11 @@ uv run python main.py --config configs/config.yaml --theme-keyword "天命之人
 - `overlay_top_margin`: top margin for overlay box (px)
 - `overlay_text_gap`: vertical gap between overlay and text block (px)
 - Subtitle render mode:
-- `subtitle_render_mode`: `classic` (existing effects) or `flip_big` (Jianying-like flip big text)
+- `subtitle_render_mode`: `classic` (existing effects) or `flip_big` (`SRT+ASS` burn-in pipeline)
 - `flip_big_style`: `progressive` (word-by-word) or `sentence` (whole sentence)
 - `flip_big_max_lines`: max retained lines for `progressive` mode before rolling window trim
+- `flip_big_anchor_y_ratio`: anchor Y ratio for `progressive` mode (`0~1`, default `0.56`)
+- `flip_big_sentence_anchor_y_ratio`: anchor Y ratio for `sentence` mode (`0~1`, default `0.50`)
 - Parallel workers:
 - `tts_workers`: concurrent TTS tasks
 - `image_workers`: concurrent image render tasks
@@ -120,6 +122,8 @@ output/
       audio_manifest.json
     04_segments/
       0001.mp4 ...
+      0001.srt ...
+      0001.ass ...
       segments_manifest.json
     05_final/
       concat_list.txt
@@ -131,6 +135,8 @@ output/
 ```
 
 For multi-mode output, `02_images/` and `04_segments/` will contain mode subfolders, and `05_final/` uses mode suffixes.
+
+When `subtitle_render_mode=flip_big`, `04_segments[/mode]/` keeps one `.srt` (timeline/debug) and one `.ass` (animated burn-in source) per sentence clip.
 
 ## Notes
 

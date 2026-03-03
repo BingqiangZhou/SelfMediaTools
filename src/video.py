@@ -6,7 +6,6 @@ import os
 import random
 import re
 import time
-import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -31,6 +30,9 @@ MAX_CLIP_RETRIES = 3
 # Supported text effect names for cycling.
 SUPPORTED_EFFECTS = ("fadein", "fadeout", "slide_left", "slide_right", "slide_top", "slide_bottom", "rotate")
 FLIP_PUNCT = set("，。！？；：,.!?;:、…（）()【】[]{}《》<>“”\"'‘’")
+FLIP_OPEN_PUNCT = set("（([【《<“‘\"")
+FLIP_CLOSE_PUNCT = FLIP_PUNCT - FLIP_OPEN_PUNCT
+FLIP_WORD_CONNECTOR = {"-", "'", "."}
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -201,67 +203,133 @@ def _apply_text_effect(
 
 
 def _is_cjk_char(ch: str) -> bool:
-    return "\u4e00" <= ch <= "\u9fff"
+    code = ord(ch)
+    return (
+        0x4E00 <= code <= 0x9FFF      # CJK Unified Ideographs
+        or 0x3400 <= code <= 0x4DBF   # CJK Extension A
+        or 0xF900 <= code <= 0xFAFF   # CJK Compatibility Ideographs
+    )
 
 
 def _is_alnum_char(ch: str) -> bool:
-    return bool(re.match(r"[A-Za-z0-9]", ch))
+    return ch.isascii() and ch.isalnum()
+
+
+@functools.lru_cache(maxsize=1)
+def _load_jieba_module():
+    try:
+        import jieba  # type: ignore[import-not-found]
+    except Exception:
+        return None
+    return jieba
+
+
+def _split_cjk_phrase(text: str) -> list[str]:
+    if not text:
+        return []
+
+    jieba_module = _load_jieba_module()
+    if jieba_module is not None:
+        try:
+            words = [word.strip() for word in jieba_module.cut(text, HMM=False) if word.strip()]
+            if words:
+                return words
+        except Exception:
+            pass
+
+    # Fallback: keep mostly two-char chunks while avoiding 1-char tail tokens.
+    words: list[str] = []
+    i = 0
+    while i < len(text):
+        remaining = len(text) - i
+        if remaining <= 2:
+            words.append(text[i:])
+            break
+        if remaining == 3:
+            words.append(text[i:])
+            break
+        words.append(text[i:i + 2])
+        i += 2
+    return [word for word in words if word]
+
+
+def _merge_flip_punct(tokens: list[str]) -> list[str]:
+    if not tokens:
+        return []
+
+    merged: list[str] = []
+    pending_prefix = ""
+    for token in tokens:
+        if token in FLIP_OPEN_PUNCT:
+            pending_prefix += token
+            continue
+        if token in FLIP_CLOSE_PUNCT:
+            if merged:
+                merged[-1] = f"{merged[-1]}{token}"
+            elif pending_prefix:
+                pending_prefix += token
+            else:
+                merged.append(token)
+            continue
+
+        if pending_prefix:
+            token = f"{pending_prefix}{token}"
+            pending_prefix = ""
+        merged.append(token)
+
+    if pending_prefix:
+        if merged:
+            merged[-1] = f"{merged[-1]}{pending_prefix}"
+        else:
+            merged.append(pending_prefix)
+    return [token for token in merged if token]
 
 
 def _tokenize_flip_big_words(text: str) -> list[str]:
     raw_tokens: list[str] = []
-    current: list[str] = []
-    current_kind: str | None = None
-
-    def _flush() -> None:
-        nonlocal current_kind
-        if current:
-            raw_tokens.append("".join(current))
-            current.clear()
-        current_kind = None
-
-    for ch in text:
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
         if ch.isspace():
-            _flush()
+            i += 1
             continue
-        if ch in FLIP_PUNCT:
-            _flush()
-            raw_tokens.append(ch)
-            continue
+
         if _is_cjk_char(ch):
-            kind = "cjk"
-        elif _is_alnum_char(ch):
-            kind = "alnum"
-        else:
-            kind = "other"
-
-        if current_kind is None or current_kind == kind:
-            current.append(ch)
-            current_kind = kind
+            j = i + 1
+            while j < n and _is_cjk_char(text[j]):
+                j += 1
+            raw_tokens.extend(_split_cjk_phrase(text[i:j]))
+            i = j
             continue
 
-        _flush()
-        current.append(ch)
-        current_kind = kind
-
-    _flush()
-
-    split_tokens: list[str] = []
-    for token in raw_tokens:
-        if token and all(_is_cjk_char(ch) for ch in token):
-            for i in range(0, len(token), 2):
-                split_tokens.append(token[i:i + 2])
+        if _is_alnum_char(ch):
+            token_chars = [ch]
+            i += 1
+            while i < n:
+                nxt = text[i]
+                if _is_alnum_char(nxt):
+                    token_chars.append(nxt)
+                    i += 1
+                    continue
+                if (
+                    nxt in FLIP_WORD_CONNECTOR
+                    and i + 1 < n
+                    and _is_alnum_char(token_chars[-1])
+                    and _is_alnum_char(text[i + 1])
+                ):
+                    token_chars.append(nxt)
+                    token_chars.append(text[i + 1])
+                    i += 2
+                    continue
+                break
+            raw_tokens.append("".join(token_chars))
             continue
-        split_tokens.append(token)
 
-    merged: list[str] = []
-    for token in split_tokens:
-        if token in FLIP_PUNCT and merged:
-            merged[-1] = f"{merged[-1]}{token}"
-        else:
-            merged.append(token)
+        raw_tokens.append(ch)
+        i += 1
 
-    return [token for token in merged if token]
+    return _merge_flip_punct(raw_tokens)
 
 
 @functools.lru_cache(maxsize=64)
@@ -285,6 +353,30 @@ def _font_line_height(font_path: Path, font_size: int, line_spacing: float) -> i
     return max(1, int((ascent + descent) * line_spacing))
 
 
+def _needs_space_between_tokens(prev_token: str, next_token: str) -> bool:
+    if not prev_token or not next_token:
+        return False
+    prev_last = prev_token[-1]
+    next_first = next_token[0]
+    return (
+        prev_last.isascii()
+        and next_first.isascii()
+        and prev_last.isalnum()
+        and next_first.isalnum()
+    )
+
+
+def _join_flip_tokens(tokens: list[str]) -> str:
+    if not tokens:
+        return ""
+    parts = [tokens[0]]
+    for token in tokens[1:]:
+        if _needs_space_between_tokens(parts[-1], token):
+            parts.append(" ")
+        parts.append(token)
+    return "".join(parts)
+
+
 def _wrap_tokens_to_lines(
     tokens: list[str],
     max_width: int,
@@ -297,7 +389,7 @@ def _wrap_tokens_to_lines(
     lines: list[list[str]] = []
     current_line: list[str] = []
     for token in tokens:
-        candidate = "".join(current_line + [token])
+        candidate = _join_flip_tokens(current_line + [token])
         if (not current_line) or _measure_text_width(candidate, font_path, font_size) <= max_width:
             current_line.append(token)
             continue
@@ -306,14 +398,6 @@ def _wrap_tokens_to_lines(
     if current_line:
         lines.append(current_line)
     return lines
-
-
-def _clip_recent_lines(lines: list[list[str]], max_lines: int) -> list[list[str]]:
-    if max_lines <= 0:
-        return []
-    if len(lines) <= max_lines:
-        return lines
-    return lines[-max_lines:]
 
 
 def _flip_big_layout_width(size: CanvasSize, settings: RenderSettings) -> int:
@@ -333,6 +417,52 @@ def _fallback_wrap_by_count(tokens: list[str], size: CanvasSize) -> list[list[st
     return [tokens[i:i + max_per_line] for i in range(0, len(tokens), max_per_line)]
 
 
+def _flip_big_anchor_y(size: CanvasSize, settings: RenderSettings, *, sentence_mode: bool) -> float:
+    ratio = (
+        settings.flip_big_sentence_anchor_y_ratio
+        if sentence_mode
+        else settings.flip_big_anchor_y_ratio
+    )
+    ratio = max(0.0, min(1.0, float(ratio)))
+    top_bound = float(settings.text_margin_y)
+    bottom_bound = float(max(settings.text_margin_y, size.height - settings.text_margin_y))
+    anchor = float(size.height) * ratio
+    return min(max(anchor, top_bound), bottom_bound)
+
+
+def _progressive_time_windows(
+    tokens: list[str],
+    duration: float,
+    settings: RenderSettings,
+) -> list[tuple[float, float]]:
+    if not tokens:
+        return []
+
+    min_weight = max(2.0, settings.font_size * 0.08)
+    weights = [
+        max(min_weight, _measure_text_width(token, settings.font_path, settings.font_size))
+        for token in tokens
+    ]
+    total_weight = sum(weights)
+    if total_weight <= 0:
+        step = duration / float(len(tokens))
+        return [
+            (idx * step, duration if idx == len(tokens) - 1 else (idx + 1) * step)
+            for idx in range(len(tokens))
+        ]
+
+    windows: list[tuple[float, float]] = []
+    cursor = 0.0
+    for index, weight in enumerate(weights):
+        start = duration * (cursor / total_weight)
+        cursor += weight
+        end = duration if index == len(tokens) - 1 else duration * (cursor / total_weight)
+        if end <= start:
+            end = min(duration, start + 0.001)
+        windows.append((start, end))
+    return windows
+
+
 def _build_history_spin_events(token_count: int, seed_text: str) -> dict[int, float]:
     """Build spin events where key is 1-based token count and value is target angle."""
     if token_count <= 1:
@@ -347,157 +477,277 @@ def _build_history_spin_events(token_count: int, seed_text: str) -> dict[int, fl
     return events
 
 
-def _apply_flip_pulse(
-    clip: TextClip | CompositeVideoClip,
-    burst_duration: float,
-    start_angle: float,
-    start_scale: float,
-) -> TextClip | CompositeVideoClip:
-    if burst_duration <= 0:
-        return clip
-
-    def _rotation(t: float) -> float:
-        if t >= burst_duration:
-            return 0.0
-        progress = t / burst_duration
-        return start_angle * (1.0 - progress)
-
-    def _scale(t: float) -> float:
-        if t >= burst_duration:
-            return 1.0
-        progress = t / burst_duration
-        eased = 1.0 - (1.0 - progress) * (1.0 - progress)
-        return start_scale + (1.0 - start_scale) * eased
-
-    return clip.with_effects([vfx.Resize(_scale), vfx.Rotate(_rotation, expand=False)])
+def _format_srt_timestamp(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000.0)))
+    ms = total_ms % 1000
+    total_seconds = total_ms // 1000
+    sec = total_seconds % 60
+    total_minutes = total_seconds // 60
+    minute = total_minutes % 60
+    hour = total_minutes // 60
+    return f"{hour:02d}:{minute:02d}:{sec:02d},{ms:03d}"
 
 
-def _apply_rotate_to_side(
-    clip: TextClip | CompositeVideoClip,
-    burst_duration: float,
-    target_angle: float,
-) -> TextClip | CompositeVideoClip:
-    if burst_duration <= 0:
-        return clip
-
-    def _rotation(t: float) -> float:
-        if t >= burst_duration:
-            return target_angle
-        progress = t / burst_duration
-        return target_angle * progress
-
-    return clip.with_effects([vfx.Rotate(_rotation, expand=False)])
+def _format_ass_timestamp(seconds: float) -> str:
+    total_cs = max(0, int(round(seconds * 100.0)))
+    cs = total_cs % 100
+    total_seconds = total_cs // 100
+    sec = total_seconds % 60
+    total_minutes = total_seconds // 60
+    minute = total_minutes % 60
+    hour = total_minutes // 60
+    return f"{hour:d}:{minute:02d}:{sec:02d}.{cs:02d}"
 
 
-def _build_flip_big_sentence_clip(
+def _hex_to_ass_primary(hex_color: str) -> str:
+    r, g, b = _hex_to_rgb(hex_color)
+    return f"&H00{b:02X}{g:02X}{r:02X}"
+
+
+def _ass_alpha_from_opacity(opacity: float) -> str:
+    clamped = max(0.0, min(1.0, opacity))
+    alpha = int(round((1.0 - clamped) * 255.0))
+    return f"&H{alpha:02X}&"
+
+
+def _escape_ass_text(text: str) -> str:
+    escaped = text.replace("\\", r"\\")
+    escaped = escaped.replace("{", r"\{").replace("}", r"\}")
+    escaped = escaped.replace("\r\n", "\n").replace("\r", "\n")
+    return escaped.replace("\n", r"\N")
+
+
+def _font_family_from_path(font_path: Path) -> str:
+    mapping = {
+        "msyh": "Microsoft YaHei",
+        "msyhbd": "Microsoft YaHei",
+        "simhei": "SimHei",
+        "simsun": "SimSun",
+        "arial": "Arial",
+    }
+    family = mapping.get(font_path.stem.lower(), font_path.stem)
+    return family.replace(",", "")
+
+
+def _build_flip_big_srt_events(
     item: AudioItem,
     size: CanvasSize,
     settings: RenderSettings,
     total_duration: float,
-) -> TextClip:
-    layout_width = _flip_big_layout_width(size, settings)
-    text = TextClip(
-        font=str(settings.font_path),
-        text=item.text,
-        font_size=settings.font_size,
-        color=settings.text_color,
-        bg_color=None,
-        size=(layout_width, size.height - settings.text_margin_y * 2),
-        method="caption",
-        text_align="center",
-        horizontal_align="center",
-        vertical_align="center",
-        interline=int(settings.font_size * (settings.line_spacing - 1)),
-        transparent=True,
-        duration=total_duration,
-    ).with_position("center")
-    burst = min(0.16, max(0.05, total_duration * 0.35))
-    return _apply_flip_pulse(text, burst_duration=burst, start_angle=-10.0, start_scale=0.85)
-
-
-def _build_flip_big_progressive_clip(
-    item: AudioItem,
-    size: CanvasSize,
-    settings: RenderSettings,
-    total_duration: float,
-) -> CompositeVideoClip:
-    area_w = _flip_big_layout_width(size, settings)
-    area_h = max(50, size.height - settings.text_margin_y * 2)
+) -> list[tuple[float, float, str]]:
+    duration = max(0.001, total_duration)
+    if settings.flip_big_style == "sentence":
+        tokens = _tokenize_flip_big_words(item.text)
+        if not tokens:
+            tokens = [item.text] if item.text else [""]
+        area_w = _flip_big_layout_width(size, settings)
+        wrapped = _wrap_tokens_to_lines(tokens, area_w, settings.font_path, settings.font_size)
+        if not wrapped:
+            wrapped = _fallback_wrap_by_count(tokens, size)
+        text = "\n".join(_join_flip_tokens(line) for line in wrapped if line).strip() or item.text
+        return [(0.0, duration, text)]
 
     tokens = _tokenize_flip_big_words(item.text)
     if not tokens:
         tokens = [item.text] if item.text else [""]
-    token_count = max(1, len(tokens))
-    step = total_duration / float(token_count) if total_duration > 0 else 0.001
+    windows = _progressive_time_windows(tokens, duration, settings)
+    if not windows:
+        windows = [(0.0, duration)]
 
-    big_font_size = settings.font_size
-    history_font_size = max(18, int(settings.font_size * 0.70))
-    line_gap = max(6, int(settings.font_size * 0.10))
-    spin_events = _build_history_spin_events(token_count, seed_text=item.text)
-
-    overlay_clips: list[CompositeVideoClip] = []
-    for index in range(token_count):
-        start = index * step
-        state_duration = max(0.001, total_duration - start if index == token_count - 1 else step)
-        active_tokens = tokens[: index + 1]
-        visible_tokens = active_tokens[-settings.flip_big_max_lines :]
-
-        state_layers: list[TextClip | CompositeVideoClip] = []
-        y_cursor = 0.0
-        for line_index, token in enumerate(visible_tokens):
-            is_latest = line_index == len(visible_tokens) - 1
-            font_size = big_font_size if is_latest else history_font_size
-            line_clip = TextClip(
-                font=str(settings.font_path),
-                text=token,
-                font_size=font_size,
-                color=settings.text_color,
-                bg_color=None,
-                method="label",
-                transparent=True,
-                duration=state_duration,
-            ).with_opacity(1.0 if is_latest else 0.85)
-            if is_latest:
-                # 90-degree entry rotation for the newest line.
-                rotate_burst = min(0.16, max(0.06, state_duration * 0.7))
-                line_clip = _apply_flip_pulse(
-                    line_clip,
-                    burst_duration=rotate_burst,
-                    start_angle=-90.0,
-                    start_scale=0.9,
-                )
-            elif (index + 1) in spin_events:
-                # Every 3-5 phrases, historical lines spin to a random side (left/right).
-                history_burst = min(0.20, max(0.08, state_duration * 0.8))
-                line_clip = _apply_rotate_to_side(
-                    line_clip,
-                    burst_duration=history_burst,
-                    target_angle=spin_events[index + 1],
-                ).with_opacity(0.72)
-            state_layers.append(line_clip.with_position((0, y_cursor)))
-            line_height = _font_line_height(settings.font_path, font_size, settings.line_spacing)
-            y_cursor += line_height + line_gap
-
-        state_block = CompositeVideoClip(state_layers, size=(area_w, area_h)).with_duration(state_duration)
-        burst = min(0.12, max(0.04, state_duration * 0.6))
-        state_block = _apply_flip_pulse(state_block, burst_duration=burst, start_angle=-6.0, start_scale=0.92)
-        block_x = (size.width - area_w) / 2.0
-        overlay_clips.append(
-            state_block.with_start(start).with_position((block_x, settings.text_margin_y))
-        )
-
-    return CompositeVideoClip(overlay_clips, size=(size.width, size.height)).with_duration(total_duration)
+    events: list[tuple[float, float, str]] = []
+    for index, (start, end) in enumerate(windows):
+        visible = tokens[: index + 1][-settings.flip_big_max_lines :]
+        text = "\n".join(visible).strip()
+        if not text:
+            text = item.text
+        events.append((start, end, text))
+    return events
 
 
-def _build_flip_big_text_layer(
+def _build_flip_big_ass_events(
     item: AudioItem,
     size: CanvasSize,
     settings: RenderSettings,
     total_duration: float,
-) -> TextClip | CompositeVideoClip:
+) -> list[str]:
+    duration = max(0.001, total_duration)
+    color = _hex_to_ass_primary(settings.text_color)
+    center_x = int(round(size.width / 2.0))
+    events: list[str] = []
+
     if settings.flip_big_style == "sentence":
-        return _build_flip_big_sentence_clip(item, size, settings, total_duration)
-    return _build_flip_big_progressive_clip(item, size, settings, total_duration)
+        tokens = _tokenize_flip_big_words(item.text)
+        if not tokens:
+            tokens = [item.text] if item.text else [""]
+        area_w = _flip_big_layout_width(size, settings)
+        wrapped = _wrap_tokens_to_lines(tokens, area_w, settings.font_path, settings.font_size)
+        if not wrapped:
+            wrapped = _fallback_wrap_by_count(tokens, size)
+        text = (
+            r"\N".join(_escape_ass_text(_join_flip_tokens(line)) for line in wrapped if line).strip()
+            or _escape_ass_text(item.text)
+        )
+
+        center_y = int(round(_flip_big_anchor_y(size, settings, sentence_mode=True)))
+        burst_cs = max(1, int(round(min(0.16, max(0.05, duration * 0.35)) * 100.0)))
+        tags = (
+            rf"\an5\pos({center_x},{center_y})\fs{settings.font_size}\c{color}\1a{_ass_alpha_from_opacity(1.0)}"
+            rf"\frx-10\fscx85\fscy85\t(0,{burst_cs},\frx0\fscx100\fscy100)"
+        )
+        events.append(
+            "Dialogue: 0,"
+            f"{_format_ass_timestamp(0.0)},{_format_ass_timestamp(duration)},Default,,0,0,0,,"
+            f"{{{tags}}}{text}"
+        )
+        return events
+
+    tokens = _tokenize_flip_big_words(item.text)
+    if not tokens:
+        tokens = [item.text] if item.text else [""]
+    windows = _progressive_time_windows(tokens, duration, settings)
+    if not windows:
+        windows = [(0.0, duration)]
+    token_count = max(1, len(windows))
+    spin_events = _build_history_spin_events(token_count, seed_text=item.text)
+    history_font_size = max(18, int(settings.font_size * 0.70))
+    line_gap = max(6, int(settings.font_size * 0.10))
+    top_bound = float(settings.text_margin_y)
+    bottom_bound = float(max(settings.text_margin_y, size.height - settings.text_margin_y))
+    available_height = max(1.0, bottom_bound - top_bound)
+    anchor_y = _flip_big_anchor_y(size, settings, sentence_mode=False)
+
+    for index, (start, end) in enumerate(windows):
+        state_duration = max(0.001, end - start)
+        visible_tokens = tokens[: index + 1][-settings.flip_big_max_lines :]
+        has_spin = (index + 1) in spin_events
+        spin_angle = int(spin_events[index + 1]) if has_spin else 0
+
+        line_specs: list[tuple[str, bool, int, int]] = []
+        for line_index, token in enumerate(visible_tokens):
+            is_latest = line_index == len(visible_tokens) - 1
+            font_size = settings.font_size if is_latest else history_font_size
+            line_h = _font_line_height(settings.font_path, font_size, settings.line_spacing)
+            line_specs.append((token, is_latest, font_size, line_h))
+
+        block_height = sum(spec[3] for spec in line_specs)
+        if len(line_specs) > 1:
+            block_height += line_gap * (len(line_specs) - 1)
+        if block_height >= available_height:
+            block_top = top_bound
+        else:
+            block_top = max(top_bound, min(anchor_y - block_height / 2.0, bottom_bound - block_height))
+        y_cursor = block_top
+
+        for token, is_latest, font_size, line_h in line_specs:
+            opacity = 1.0 if is_latest else (0.72 if has_spin else 0.85)
+            alpha = _ass_alpha_from_opacity(opacity)
+            y_pos = int(round(y_cursor + line_h / 2.0))
+
+            tags = rf"\an5\pos({center_x},{y_pos})\fs{font_size}\c{color}\1a{alpha}"
+            if is_latest:
+                burst_cs = max(1, int(round(min(0.16, max(0.06, state_duration * 0.7)) * 100.0)))
+                tags += rf"\frx-90\fscx90\fscy90\t(0,{burst_cs},\frx0\fscx100\fscy100)"
+            elif has_spin:
+                burst_cs = max(1, int(round(min(0.20, max(0.08, state_duration * 0.8)) * 100.0)))
+                tags += rf"\frz0\t(0,{burst_cs},\frz{spin_angle})"
+
+            line_text = _escape_ass_text(token)
+            events.append(
+                "Dialogue: 0,"
+                f"{_format_ass_timestamp(start)},{_format_ass_timestamp(end)},Default,,0,0,0,,"
+                f"{{{tags}}}{line_text}"
+            )
+            y_cursor += line_h + line_gap
+
+    return events
+
+
+def _build_flip_big_subtitles(
+    item: AudioItem,
+    size: CanvasSize,
+    settings: RenderSettings,
+    total_duration: float,
+    clips_dir: Path,
+) -> tuple[Path, Path]:
+    srt_path = clips_dir / numbered_name(item.index, "srt")
+    ass_path = clips_dir / numbered_name(item.index, "ass")
+
+    srt_events = _build_flip_big_srt_events(item, size, settings, total_duration)
+    srt_blocks: list[str] = []
+    for idx, (start, end, text) in enumerate(srt_events, start=1):
+        srt_blocks.append(str(idx))
+        srt_blocks.append(f"{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}")
+        srt_blocks.append(text.strip() or item.text)
+        srt_blocks.append("")
+    srt_path.write_text("\n".join(srt_blocks).rstrip() + "\n", encoding="utf-8")
+
+    style_font = _font_family_from_path(settings.font_path)
+    primary = _hex_to_ass_primary(settings.text_color)
+    ass_header = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {size.width}",
+        f"PlayResY: {size.height}",
+        "ScaledBorderAndShadow: yes",
+        "WrapStyle: 2",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: Default,"
+        f"{style_font},{settings.font_size},{primary},{primary},&H00000000,&H64000000,"
+        f"0,0,0,0,100,100,0,0,1,2,0,8,10,10,{max(0, settings.text_margin_y)},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    ass_events = _build_flip_big_ass_events(item, size, settings, total_duration)
+    ass_path.write_text("\n".join(ass_header + ass_events) + "\n", encoding="utf-8")
+    return srt_path.resolve(), ass_path.resolve()
+
+
+def _escape_ffmpeg_filter_path(path: Path) -> str:
+    escaped = path.resolve().as_posix()
+    escaped = escaped.replace(":", r"\:")
+    escaped = escaped.replace("'", r"\'")
+    escaped = escaped.replace(",", r"\,")
+    escaped = escaped.replace("[", r"\[").replace("]", r"\]")
+    return escaped
+
+
+def _burn_ass_subtitles(
+    *,
+    input_video: Path,
+    ass_path: Path,
+    output_video: Path,
+    fps: int,
+    logger: logging.Logger | None,
+) -> Path:
+    if fps <= 0:
+        raise ValueError("fps must be > 0 for subtitle burning")
+
+    ass_filter = _escape_ffmpeg_filter_path(ass_path)
+    vf = f"ass='{ass_filter}'"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_video),
+        "-vf",
+        vf,
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "superfast",
+        "-c:a",
+        "copy",
+        str(output_video),
+    ]
+    run_cmd(cmd, logger=logger, check=True)
+    return output_video.resolve()
 
 
 def _create_single_clip(
@@ -510,9 +760,14 @@ def _create_single_clip(
     logger: logging.Logger | None,
 ) -> tuple[int, Path]:
     clip_path = clips_dir / numbered_name(item.index, "mp4")
+    base_clip_path = clips_dir / numbered_name(item.index, "base.mp4")
 
     last_exc: Exception | None = None
     for attempt in range(1, MAX_CLIP_RETRIES + 1):
+        audio: AudioFileClip | None = None
+        video: CompositeVideoClip | None = None
+        bg: ColorClip | None = None
+        text: TextClip | None = None
         try:
             audio = AudioFileClip(str(item.audio_path))
             clip_delay = tts_start_offset if item.index == 1 else 0.0
@@ -533,7 +788,7 @@ def _create_single_clip(
                         )
                     if settings.random_color:
                         logger.info("subtitle_render_mode=flip_big: random_color is ignored; text_color is used")
-                text = _build_flip_big_text_layer(item, size, settings, total_duration)
+                video = CompositeVideoClip([bg], size=(size.width, size.height))
             else:
                 # Text clip: sentence rendered via MoviePy TextClip.
                 text_color = _pick_text_color(item.index, settings)
@@ -564,11 +819,7 @@ def _create_single_clip(
                 # the position (e.g. slide effects) we must not override it.
                 if not handles_position:
                     text = text.with_position("center")
-
-            video = CompositeVideoClip(
-                [bg, text],
-                size=(size.width, size.height),
-            )
+                video = CompositeVideoClip([bg, text], size=(size.width, size.height))
 
             if clip_delay > 0:
                 silence = _silent_audio(clip_delay, fps=audio.fps or 44100)
@@ -580,8 +831,9 @@ def _create_single_clip(
             else:
                 video = video.with_audio(audio)
 
+            render_target = base_clip_path if settings.subtitle_render_mode == "flip_big" else clip_path
             video.write_videofile(
-                str(clip_path),
+                str(render_target),
                 fps=fps,
                 codec="libx264",
                 audio_codec="aac",
@@ -589,8 +841,24 @@ def _create_single_clip(
                 threads=1,
                 logger=None,
             )
-            audio.close()
-            video.close()
+
+            if settings.subtitle_render_mode == "flip_big":
+                _build_flip_big_subtitles(
+                    item=item,
+                    size=size,
+                    settings=settings,
+                    total_duration=total_duration,
+                    clips_dir=clips_dir,
+                )
+                _burn_ass_subtitles(
+                    input_video=base_clip_path,
+                    ass_path=clips_dir / numbered_name(item.index, "ass"),
+                    output_video=clip_path,
+                    fps=fps,
+                    logger=logger,
+                )
+                if base_clip_path.exists():
+                    base_clip_path.unlink()
 
             if logger:
                 logger.info("clip generated: %s", clip_path)
@@ -607,8 +875,22 @@ def _create_single_clip(
                 )
             if clip_path.exists():
                 clip_path.unlink()
+            if base_clip_path.exists():
+                if attempt < MAX_CLIP_RETRIES:
+                    base_clip_path.unlink()
+                elif logger:
+                    logger.warning("preserving temporary base clip for debugging: %s", base_clip_path)
             if attempt < MAX_CLIP_RETRIES:
                 time.sleep(float(attempt))
+        finally:
+            if audio is not None:
+                audio.close()
+            if text is not None:
+                text.close()
+            if bg is not None:
+                bg.close()
+            if video is not None:
+                video.close()
 
     raise RuntimeError(
         f"Failed to generate clip after {MAX_CLIP_RETRIES} attempts: {clip_path}"

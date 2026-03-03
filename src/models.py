@@ -33,6 +33,8 @@ class RenderSettings:
     subtitle_render_mode: str = "classic"
     flip_big_style: str = "progressive"
     flip_big_max_lines: int = 3
+    flip_big_anchor_y_ratio: float = 0.56
+    flip_big_sentence_anchor_y_ratio: float = 0.50
 
 
 @dataclass(frozen=True)
