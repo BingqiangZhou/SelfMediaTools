@@ -94,6 +94,10 @@ uv run python main.py --config configs/config.yaml --theme-keyword "天命之人
 - `overlay_box_width_ratio`: max overlay side ratio by width (overlay uses a square box in both modes)
 - `overlay_top_margin`: top margin for overlay box (px)
 - `overlay_text_gap`: vertical gap between overlay and text block (px)
+- Subtitle render mode:
+- `subtitle_render_mode`: `classic` (existing effects) or `flip_big` (Jianying-like flip big text)
+- `flip_big_style`: `progressive` (word-by-word) or `sentence` (whole sentence)
+- `flip_big_max_lines`: max retained lines for `progressive` mode before rolling window trim
 - Parallel workers:
 - `tts_workers`: concurrent TTS tasks
 - `image_workers`: concurrent image render tasks

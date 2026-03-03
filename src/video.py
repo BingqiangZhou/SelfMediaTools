@@ -1,7 +1,10 @@
 ﻿from __future__ import annotations
 
+import functools
 import logging
 import os
+import random
+import re
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +22,7 @@ from moviepy import (
 )
 from ffmpeg_utils import run_cmd
 from moviepy.audio.AudioClip import AudioClip
+from PIL import ImageFont
 
 from models import AudioItem, CanvasSize, OutputMode, RenderSettings, numbered_name
 
@@ -26,6 +30,7 @@ MAX_CLIP_RETRIES = 3
 
 # Supported text effect names for cycling.
 SUPPORTED_EFFECTS = ("fadein", "fadeout", "slide_left", "slide_right", "slide_top", "slide_bottom", "rotate")
+FLIP_PUNCT = set("，。！？；：,.!?;:、…（）()【】[]{}《》<>“”\"'‘’")
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -195,6 +200,306 @@ def _apply_text_effect(
     return text_clip, False
 
 
+def _is_cjk_char(ch: str) -> bool:
+    return "\u4e00" <= ch <= "\u9fff"
+
+
+def _is_alnum_char(ch: str) -> bool:
+    return bool(re.match(r"[A-Za-z0-9]", ch))
+
+
+def _tokenize_flip_big_words(text: str) -> list[str]:
+    raw_tokens: list[str] = []
+    current: list[str] = []
+    current_kind: str | None = None
+
+    def _flush() -> None:
+        nonlocal current_kind
+        if current:
+            raw_tokens.append("".join(current))
+            current.clear()
+        current_kind = None
+
+    for ch in text:
+        if ch.isspace():
+            _flush()
+            continue
+        if ch in FLIP_PUNCT:
+            _flush()
+            raw_tokens.append(ch)
+            continue
+        if _is_cjk_char(ch):
+            kind = "cjk"
+        elif _is_alnum_char(ch):
+            kind = "alnum"
+        else:
+            kind = "other"
+
+        if current_kind is None or current_kind == kind:
+            current.append(ch)
+            current_kind = kind
+            continue
+
+        _flush()
+        current.append(ch)
+        current_kind = kind
+
+    _flush()
+
+    split_tokens: list[str] = []
+    for token in raw_tokens:
+        if token and all(_is_cjk_char(ch) for ch in token):
+            for i in range(0, len(token), 2):
+                split_tokens.append(token[i:i + 2])
+            continue
+        split_tokens.append(token)
+
+    merged: list[str] = []
+    for token in split_tokens:
+        if token in FLIP_PUNCT and merged:
+            merged[-1] = f"{merged[-1]}{token}"
+        else:
+            merged.append(token)
+
+    return [token for token in merged if token]
+
+
+@functools.lru_cache(maxsize=64)
+def _load_font(font_path: str, font_size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(font_path, size=font_size)
+
+
+def _measure_text_width(text: str, font_path: Path, font_size: int) -> float:
+    if not text:
+        return 0.0
+    font = _load_font(str(font_path), font_size)
+    if hasattr(font, "getlength"):
+        return float(font.getlength(text))
+    bbox = font.getbbox(text)
+    return float(bbox[2] - bbox[0])
+
+
+def _font_line_height(font_path: Path, font_size: int, line_spacing: float) -> int:
+    font = _load_font(str(font_path), font_size)
+    ascent, descent = font.getmetrics()
+    return max(1, int((ascent + descent) * line_spacing))
+
+
+def _wrap_tokens_to_lines(
+    tokens: list[str],
+    max_width: int,
+    font_path: Path,
+    font_size: int,
+) -> list[list[str]]:
+    if not tokens:
+        return []
+
+    lines: list[list[str]] = []
+    current_line: list[str] = []
+    for token in tokens:
+        candidate = "".join(current_line + [token])
+        if (not current_line) or _measure_text_width(candidate, font_path, font_size) <= max_width:
+            current_line.append(token)
+            continue
+        lines.append(current_line)
+        current_line = [token]
+    if current_line:
+        lines.append(current_line)
+    return lines
+
+
+def _clip_recent_lines(lines: list[list[str]], max_lines: int) -> list[list[str]]:
+    if max_lines <= 0:
+        return []
+    if len(lines) <= max_lines:
+        return lines
+    return lines[-max_lines:]
+
+
+def _flip_big_layout_width(size: CanvasSize, settings: RenderSettings) -> int:
+    available = max(80, size.width - settings.text_margin_x * 2)
+    ratio = 0.45 if size.width >= size.height else 0.78
+    preferred = int(size.width * ratio)
+    lower_bound = max(160, int(settings.font_size * 4.0))
+    return max(lower_bound, min(available, preferred))
+
+
+def _fallback_wrap_by_count(tokens: list[str], size: CanvasSize) -> list[list[str]]:
+    if not tokens:
+        return []
+    max_per_line = 3 if size.width >= size.height else 4
+    if len(tokens) <= max_per_line:
+        return [tokens]
+    return [tokens[i:i + max_per_line] for i in range(0, len(tokens), max_per_line)]
+
+
+def _build_history_spin_events(token_count: int, seed_text: str) -> dict[int, float]:
+    """Build spin events where key is 1-based token count and value is target angle."""
+    if token_count <= 1:
+        return {}
+
+    rng = random.Random(seed_text)
+    events: dict[int, float] = {}
+    current = rng.randint(3, 5)
+    while current <= token_count:
+        events[current] = rng.choice((-90.0, 90.0))
+        current += rng.randint(3, 5)
+    return events
+
+
+def _apply_flip_pulse(
+    clip: TextClip | CompositeVideoClip,
+    burst_duration: float,
+    start_angle: float,
+    start_scale: float,
+) -> TextClip | CompositeVideoClip:
+    if burst_duration <= 0:
+        return clip
+
+    def _rotation(t: float) -> float:
+        if t >= burst_duration:
+            return 0.0
+        progress = t / burst_duration
+        return start_angle * (1.0 - progress)
+
+    def _scale(t: float) -> float:
+        if t >= burst_duration:
+            return 1.0
+        progress = t / burst_duration
+        eased = 1.0 - (1.0 - progress) * (1.0 - progress)
+        return start_scale + (1.0 - start_scale) * eased
+
+    return clip.with_effects([vfx.Resize(_scale), vfx.Rotate(_rotation, expand=False)])
+
+
+def _apply_rotate_to_side(
+    clip: TextClip | CompositeVideoClip,
+    burst_duration: float,
+    target_angle: float,
+) -> TextClip | CompositeVideoClip:
+    if burst_duration <= 0:
+        return clip
+
+    def _rotation(t: float) -> float:
+        if t >= burst_duration:
+            return target_angle
+        progress = t / burst_duration
+        return target_angle * progress
+
+    return clip.with_effects([vfx.Rotate(_rotation, expand=False)])
+
+
+def _build_flip_big_sentence_clip(
+    item: AudioItem,
+    size: CanvasSize,
+    settings: RenderSettings,
+    total_duration: float,
+) -> TextClip:
+    layout_width = _flip_big_layout_width(size, settings)
+    text = TextClip(
+        font=str(settings.font_path),
+        text=item.text,
+        font_size=settings.font_size,
+        color=settings.text_color,
+        bg_color=None,
+        size=(layout_width, size.height - settings.text_margin_y * 2),
+        method="caption",
+        text_align="center",
+        horizontal_align="center",
+        vertical_align="center",
+        interline=int(settings.font_size * (settings.line_spacing - 1)),
+        transparent=True,
+        duration=total_duration,
+    ).with_position("center")
+    burst = min(0.16, max(0.05, total_duration * 0.35))
+    return _apply_flip_pulse(text, burst_duration=burst, start_angle=-10.0, start_scale=0.85)
+
+
+def _build_flip_big_progressive_clip(
+    item: AudioItem,
+    size: CanvasSize,
+    settings: RenderSettings,
+    total_duration: float,
+) -> CompositeVideoClip:
+    area_w = _flip_big_layout_width(size, settings)
+    area_h = max(50, size.height - settings.text_margin_y * 2)
+
+    tokens = _tokenize_flip_big_words(item.text)
+    if not tokens:
+        tokens = [item.text] if item.text else [""]
+    token_count = max(1, len(tokens))
+    step = total_duration / float(token_count) if total_duration > 0 else 0.001
+
+    big_font_size = settings.font_size
+    history_font_size = max(18, int(settings.font_size * 0.70))
+    line_gap = max(6, int(settings.font_size * 0.10))
+    spin_events = _build_history_spin_events(token_count, seed_text=item.text)
+
+    overlay_clips: list[CompositeVideoClip] = []
+    for index in range(token_count):
+        start = index * step
+        state_duration = max(0.001, total_duration - start if index == token_count - 1 else step)
+        active_tokens = tokens[: index + 1]
+        visible_tokens = active_tokens[-settings.flip_big_max_lines :]
+
+        state_layers: list[TextClip | CompositeVideoClip] = []
+        y_cursor = 0.0
+        for line_index, token in enumerate(visible_tokens):
+            is_latest = line_index == len(visible_tokens) - 1
+            font_size = big_font_size if is_latest else history_font_size
+            line_clip = TextClip(
+                font=str(settings.font_path),
+                text=token,
+                font_size=font_size,
+                color=settings.text_color,
+                bg_color=None,
+                method="label",
+                transparent=True,
+                duration=state_duration,
+            ).with_opacity(1.0 if is_latest else 0.85)
+            if is_latest:
+                # 90-degree entry rotation for the newest line.
+                rotate_burst = min(0.16, max(0.06, state_duration * 0.7))
+                line_clip = _apply_flip_pulse(
+                    line_clip,
+                    burst_duration=rotate_burst,
+                    start_angle=-90.0,
+                    start_scale=0.9,
+                )
+            elif (index + 1) in spin_events:
+                # Every 3-5 phrases, historical lines spin to a random side (left/right).
+                history_burst = min(0.20, max(0.08, state_duration * 0.8))
+                line_clip = _apply_rotate_to_side(
+                    line_clip,
+                    burst_duration=history_burst,
+                    target_angle=spin_events[index + 1],
+                ).with_opacity(0.72)
+            state_layers.append(line_clip.with_position((0, y_cursor)))
+            line_height = _font_line_height(settings.font_path, font_size, settings.line_spacing)
+            y_cursor += line_height + line_gap
+
+        state_block = CompositeVideoClip(state_layers, size=(area_w, area_h)).with_duration(state_duration)
+        burst = min(0.12, max(0.04, state_duration * 0.6))
+        state_block = _apply_flip_pulse(state_block, burst_duration=burst, start_angle=-6.0, start_scale=0.92)
+        block_x = (size.width - area_w) / 2.0
+        overlay_clips.append(
+            state_block.with_start(start).with_position((block_x, settings.text_margin_y))
+        )
+
+    return CompositeVideoClip(overlay_clips, size=(size.width, size.height)).with_duration(total_duration)
+
+
+def _build_flip_big_text_layer(
+    item: AudioItem,
+    size: CanvasSize,
+    settings: RenderSettings,
+    total_duration: float,
+) -> TextClip | CompositeVideoClip:
+    if settings.flip_big_style == "sentence":
+        return _build_flip_big_sentence_clip(item, size, settings, total_duration)
+    return _build_flip_big_progressive_clip(item, size, settings, total_duration)
+
+
 def _create_single_clip(
     item: AudioItem,
     size: CanvasSize,
@@ -220,35 +525,45 @@ def _create_single_clip(
                 duration=total_duration,
             ).with_fps(fps)
 
-            # Text clip: sentence rendered via MoviePy TextClip.
-            text_color = _pick_text_color(item.index, settings)
-            text = TextClip(
-                font=str(settings.font_path),
-                text=item.text,
-                font_size=settings.font_size,
-                color=text_color,
-                bg_color=None,
-                size=(size.width - settings.text_margin_x * 2, size.height - settings.text_margin_y * 2),
-                method="caption",
-                text_align="center",
-                horizontal_align="center",
-                vertical_align="center",
-                interline=int(settings.font_size * (settings.line_spacing - 1)),
-                transparent=True,
-                duration=total_duration,
-            )
+            if settings.subtitle_render_mode == "flip_big":
+                if item.index == 1 and logger:
+                    if settings.use_text_effects or settings.text_effects or settings.random_effect:
+                        logger.info(
+                            "subtitle_render_mode=flip_big: text_effects/use_text_effects/random_effect are ignored"
+                        )
+                    if settings.random_color:
+                        logger.info("subtitle_render_mode=flip_big: random_color is ignored; text_color is used")
+                text = _build_flip_big_text_layer(item, size, settings, total_duration)
+            else:
+                # Text clip: sentence rendered via MoviePy TextClip.
+                text_color = _pick_text_color(item.index, settings)
+                text = TextClip(
+                    font=str(settings.font_path),
+                    text=item.text,
+                    font_size=settings.font_size,
+                    color=text_color,
+                    bg_color=None,
+                    size=(size.width - settings.text_margin_x * 2, size.height - settings.text_margin_y * 2),
+                    method="caption",
+                    text_align="center",
+                    horizontal_align="center",
+                    vertical_align="center",
+                    interline=int(settings.font_size * (settings.line_spacing - 1)),
+                    transparent=True,
+                    duration=total_duration,
+                )
 
-            # Apply effect (cycling).
-            effect_name = _pick_effect_name(item.index, settings)
-            text, handles_position = _apply_text_effect(
-                text, effect_name, settings.effect_duration,
-                canvas_width=size.width, canvas_height=size.height,
-            )
+                # Apply effect (cycling).
+                effect_name = _pick_effect_name(item.index, settings)
+                text, handles_position = _apply_text_effect(
+                    text, effect_name, settings.effect_duration,
+                    canvas_width=size.width, canvas_height=size.height,
+                )
 
-            # Compose text on background.  If the effect already controls
-            # the position (e.g. slide effects) we must not override it.
-            if not handles_position:
-                text = text.with_position("center")
+                # Compose text on background.  If the effect already controls
+                # the position (e.g. slide effects) we must not override it.
+                if not handles_position:
+                    text = text.with_position("center")
 
             video = CompositeVideoClip(
                 [bg, text],

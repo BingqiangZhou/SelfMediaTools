@@ -30,6 +30,9 @@ class RenderSettings:
     use_text_effects: bool = False
     random_color: bool = False
     random_effect: bool = False
+    subtitle_render_mode: str = "classic"
+    flip_big_style: str = "progressive"
+    flip_big_max_lines: int = 3
 
 
 @dataclass(frozen=True)

@@ -48,6 +48,11 @@ use_text_effects: false
 random_color: false
 random_effect: false
 
+# Subtitle render mode
+subtitle_render_mode: classic # classic | flip_big
+flip_big_style: progressive   # progressive | sentence
+flip_big_max_lines: 3
+
 # Cover first-frame
 theme_keyword: "即将起飞"
 cover_enabled: true

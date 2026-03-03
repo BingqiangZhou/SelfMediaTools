@@ -42,6 +42,9 @@ DEFAULTS: dict[str, Any] = {
     "use_text_effects": False,
     "random_color": False,
     "random_effect": False,
+    "subtitle_render_mode": "classic",
+    "flip_big_style": "progressive",
+    "flip_big_max_lines": 3,
     "fps": 30,
     "tts_workers": 4,
     "clip_workers": 2,
@@ -110,6 +113,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-text-effects", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Enable text effects (default: false)")
     parser.add_argument("--random-color", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Use random text colors (default: false)")
     parser.add_argument("--random-effect", type=lambda x: x.lower() in ("true", "1", "yes"), default=None, help="Use random text effects (default: false)")
+    parser.add_argument("--subtitle-render-mode", type=str, choices=("classic", "flip_big"), default=None)
+    parser.add_argument("--flip-big-style", type=str, choices=("progressive", "sentence"), default=None)
+    parser.add_argument("--flip-big-max-lines", type=int, default=None)
 
     parser.add_argument("--fps", type=int, default=None)
     parser.add_argument("--tts-workers", type=int, default=None)
@@ -258,6 +264,7 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
         "fps",
         "tts_workers",
         "clip_workers",
+        "flip_big_max_lines",
     ):
         resolved[key] = int(resolved[key])
     for key in (
@@ -325,6 +332,16 @@ def _coerce_types(resolved: dict[str, Any]) -> None:
         cover_text = str(DEFAULTS["cover_text_color"])
     resolved["cover_text_color"] = cover_text
 
+    render_mode = str(resolved.get("subtitle_render_mode", "classic")).strip().lower()
+    if render_mode not in {"classic", "flip_big"}:
+        raise ValueError("subtitle_render_mode must be one of: classic, flip_big")
+    resolved["subtitle_render_mode"] = render_mode
+
+    flip_style = str(resolved.get("flip_big_style", "progressive")).strip().lower()
+    if flip_style not in {"progressive", "sentence"}:
+        raise ValueError("flip_big_style must be one of: progressive, sentence")
+    resolved["flip_big_style"] = flip_style
+
 
 def _merge_args(raw_args: argparse.Namespace) -> argparse.Namespace:
     config_path = _resolve_config_path(raw_args.config)
@@ -366,6 +383,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("tts_workers/clip_workers must be > 0")
     if args.effect_duration < 0:
         raise ValueError("effect_duration must be >= 0")
+    if args.flip_big_max_lines < 1:
+        raise ValueError("flip_big_max_lines must be >= 1")
+    if args.subtitle_render_mode not in {"classic", "flip_big"}:
+        raise ValueError("subtitle_render_mode must be one of: classic, flip_big")
+    if args.flip_big_style not in {"progressive", "sentence"}:
+        raise ValueError("flip_big_style must be one of: progressive, sentence")
 
     if args.bgm_volume < 0:
         raise ValueError("bgm_volume must be >= 0")
@@ -472,6 +495,9 @@ def run(args: argparse.Namespace) -> list[Path]:
         use_text_effects=args.use_text_effects,
         random_color=args.random_color,
         random_effect=args.random_effect,
+        subtitle_render_mode=args.subtitle_render_mode,
+        flip_big_style=args.flip_big_style,
+        flip_big_max_lines=args.flip_big_max_lines,
     )
     cover_settings = CoverSettings(
         bg_color=args.cover_bg_color,
@@ -480,6 +506,12 @@ def run(args: argparse.Namespace) -> list[Path]:
     theme_keyword = _resolve_theme_keyword(args.theme_keyword)
     logger.info("theme_keyword: %s", theme_keyword)
     logger.info("cover_enabled: %s", args.cover_enabled)
+    logger.info(
+        "subtitle_render_mode=%s flip_big_style=%s flip_big_max_lines=%d",
+        args.subtitle_render_mode,
+        args.flip_big_style,
+        args.flip_big_max_lines,
+    )
     sizes = _mode_sizes(args)
 
     segment_manifest: list[dict[str, Any]] = []
