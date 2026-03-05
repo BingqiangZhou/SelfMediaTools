@@ -4,7 +4,7 @@ text_file: examples/sample_input.txt
 
 # TTS
 voice: zh-CN-YunjianNeural #zh-CN-YunyangNeural #zh-CN-XiaoxiaoNeural
-rate: "+25%"
+rate: "+50%"
 volume: "+100%"
 tts_start_offset: 0.2
 

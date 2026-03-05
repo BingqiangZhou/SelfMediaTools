@@ -1,10 +1,10 @@
 # Input: provide either text or text_file
-text: "别等状态好了再开始，状态是做出来的。你能控制的只有今天的时间、注意力和行动：少抱怨一次，多推进一小步；少刷十分钟，多练一遍基本功。目标别写在心里，要写进日程、写进复盘。把欲望收一收，把执行提上来。你不需要被谁点燃，你要学会自己发电。"
+text: "沉默不是软弱，是看透了游戏的规则。那些喜欢争辩的人，还在用情绪对抗现实。高手早就学会了用结果说话。把精力消耗在口舌之争上，是最愚蠢的投资。真正的认知升级，是把情绪抽离，只看事实和概率。与其说服别人，不如用行动碾压怀疑。"
 text_file: null
 
 # TTS
 voice: zh-CN-YunjianNeural #zh-CN-YunyangNeural #zh-CN-XiaoxiaoNeural
-rate: "+25%"
+rate: "+50%"
 volume: "+50%"
 tts_start_offset: 0.2
 
@@ -50,7 +50,7 @@ random_effect: false
 caption_style: lyrics #classic
 
 # Cover first-frame
-theme_keyword: "即将起飞"
+theme_keyword: "认知升级"
 cover_enabled: true
 cover_bg_color: "#000000"
 cover_text_color: "#D00000"
